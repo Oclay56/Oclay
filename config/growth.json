@@ -1,0 +1,161 @@
+{
+  "assets": {
+    "baseAssetMint": "So11111111111111111111111111111111111111112",
+    "quoteAssetMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+  },
+  "discovery": {
+    "pollIntervalMs": 12000,
+    "fallbackPollIntervalMs": 18000,
+    "maxNewTokensPerPoll": 18,
+    "pairCacheTtlMs": 40000,
+    "minPairLiquidityUsd": 15000,
+    "dexAllowlist": ["raydium", "orca", "meteora"],
+    "stream": {
+      "enabled": true,
+      "provider": "helius_ws",
+      "parseMode": "hybrid_strict",
+      "minCandidateConfidence": 0.72,
+      "decoderStrictMode": true,
+      "decoderFallbackConfidenceFloor": 0.82,
+      "emitEventKinds": ["POOL_CREATE", "LIQ_ADD", "EARLY_SWAP"],
+      "reconnectMinMs": 1000,
+      "reconnectMaxMs": 30000,
+      "staleFailoverMs": 15000,
+      "maxCandidatesPerMinute": 280,
+      "programAllowlist": [
+        "CPMMoo8L3F4NbTegBCKVNfS2bY2Gb5j2qWQY3X2Y9E7",
+        "CAMMCzo5YL8w4VFF8KVHrK22GGUQxZ3Gx2wQv6qf9A8",
+        "Eo7WjKq67rjJQS1n3rY7AEvtTDHkJNNZ4wNGyreAx7An"
+      ]
+    }
+  },
+  "analysis": {
+    "entryTestAmountLamports": 2000000,
+    "exitTestSlippageBps": 850,
+    "maxImpliedRoundTripLossBps": 1000,
+    "rejectIfMintAuthority": true,
+    "rejectIfFreezeAuthority": true,
+    "rejectIfToken2022TransferHook": true,
+    "rejectIfToken2022NonTransferable": true,
+    "rejectIfToken2022DefaultFrozen": true,
+    "maxToken2022TransferFeeBps": 500,
+    "minLiquidityUsd": 30000,
+    "minVolumeH24Usd": 25000,
+    "minMarketAgeMinutes": 4,
+    "maxMarketAgeMinutes": 180,
+    "skipDeepChecksOnHardReject": true,
+    "holders": {
+      "maxTop1Pct": 12,
+      "maxTop10Pct": 28,
+      "rateLimitCooldownMs": 120000,
+      "cacheTtlMs": 120000
+    }
+  },
+  "strategy": {
+    "entryThreshold": 52,
+    "riskWeight": 1.35,
+    "weights": {
+      "HAS_MINT_AUTH": 30,
+      "HAS_FREEZE_AUTH": 40,
+      "TOKEN2022_TRANSFER_HOOK": 60,
+      "NON_TRANSFERABLE": 100,
+      "DEFAULT_FROZEN": 70,
+      "HIGH_TRANSFER_FEE": 30,
+      "NO_EXIT_ROUTE": 80,
+      "SELL_SIM_FAIL": 80,
+      "TOP1_TOO_LARGE": 25,
+      "TOP10_TOO_CONCENTRATED": 25,
+      "HOLDERS_UNKNOWN": 38,
+      "LOW_LIQUIDITY": 25,
+      "LOW_VOLUME": 20,
+      "TOO_NEW": 15,
+      "HIGH_PRICE_IMPACT": 15,
+      "DEV_DUMPING": 40,
+      "DEV_WALLET_UNKNOWN": 10,
+      "SUPPLY_INCREASED": 80,
+      "LIQUIDITY_DRAIN": 90,
+      "EXIT_ROUTE_GONE": 95,
+      "PROBE_FAILED": 100
+    },
+    "portfolio": {
+      "maxOpenPositions": 2,
+      "maxPositionNotionalUsd": 9.5,
+      "maxDailyLossUsd": 4,
+      "maxLiveCapitalUsd": 0,
+      "consecutiveLossLimit": 3,
+      "consecutiveLossCooldownMinutes": 45
+    },
+    "sniper": {
+      "enabled": true,
+      "initialEntryPct": 25,
+      "scaleDelayMs": 25000,
+      "scaleEntryPct": 75,
+      "maxHoldMinutes": 8,
+      "maxLiquidityDegradePctBeforeScale": 7,
+      "requireStableSellRoute": true,
+      "requireStageBForScale": true,
+      "stageBMaxWaitMs": 90000,
+      "stageBPollMs": 3000
+    },
+    "exits": {
+      "stopLossBps": 1600,
+      "takeProfitBps": 3800,
+      "trailingStopBps": 1100,
+      "maxHoldMinutes": 70,
+      "tpLadderPercents": [30, 30, 40],
+      "tpLadderTriggerBps": [1000, 2200, 4500],
+      "trailingAfterTp1Bps": 650
+    }
+  },
+  "execution": {
+    "slippageBpsEntry": 450,
+    "slippageBpsExit": 850,
+    "maxRetries": 2,
+    "confirmTimeoutMs": 45000,
+    "sellAmountBufferBps": 80,
+    "walletReserveLamports": 30000000,
+    "positionDustAtoms": 1,
+    "txFeeLamportsEstimate": 15000,
+    "router": {
+      "entryMode": "raydium_first",
+      "raydium": {
+        "enabled": true,
+        "directEntryEnabled": false,
+        "supportedPoolKinds": ["cpmm"],
+        "poolKindPriority": ["cpmm"]
+      }
+    },
+    "sell429": {
+      "perMintBaseCooldownMs": 25000,
+      "perMintMaxCooldownMs": 300000,
+      "backoffFactor": 2.25,
+      "jitterPct": 0.2,
+      "globalWindowMs": 60000,
+      "globalTripCount": 2,
+      "globalCooldownMs": 45000
+    }
+  },
+  "probe": {
+    "enabled": false,
+    "maxNotionalLamports": 900000,
+    "cooldownMinutesOnFailure": 1440,
+    "requiredInLive": true,
+    "successCacheMinutes": 90
+  },
+  "paper": {
+    "model": "conservative",
+    "adverseEntryBps": 80,
+    "adverseExitBps": 110,
+    "fixedNetworkFeeLamportsPerSwap": 15000,
+    "highModelImpactMultiplier": 1.3
+  },
+  "guardian": {
+    "intervalMs": 12000,
+    "liquidityDrainPct": 26
+  },
+  "telemetry": {
+    "enabled": true,
+    "latencyWindowMinutes": 60,
+    "latencyKeyModel": "candidate_intent_position"
+  }
+}

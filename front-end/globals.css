@@ -1,0 +1,209 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 220 22% 5%;
+    --foreground: 220 20% 97%;
+    --card: 220 14% 7%;
+    --card-foreground: 220 20% 97%;
+    --popover: 220 14% 7%;
+    --popover-foreground: 220 20% 97%;
+    --primary: 191 78% 54%;
+    --primary-foreground: 220 13% 5%;
+    --secondary: 220 11% 11%;
+    --secondary-foreground: 220 20% 97%;
+    --muted: 220 11% 11%;
+    --muted-foreground: 220 9% 55%;
+    --accent: 191 78% 54%;
+    --accent-foreground: 220 13% 5%;
+    --destructive: 0 84% 63%;
+    --destructive-foreground: 220 20% 97%;
+    --border: 220 9% 20%;
+    --input: 220 9% 20%;
+    --ring: 191 78% 54%;
+    --radius: 0.625rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-[#0B0D10] text-[#F2F5FA];
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+}
+
+@layer components {
+  .oc-surface {
+    border: 1px solid rgba(142, 152, 169, 0.14);
+    background: linear-gradient(
+      180deg,
+      rgba(17, 19, 24, 0.4) 0%,
+      rgba(11, 13, 18, 0.22) 100%
+    );
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.03),
+      0 10px 28px rgba(0, 0, 0, 0.14);
+    backdrop-filter: blur(14px) saturate(130%);
+  }
+
+  .oc-surface-soft {
+    border: 1px solid rgba(142, 152, 169, 0.12);
+    background: rgba(17, 19, 24, 0.18);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+    backdrop-filter: blur(12px) saturate(126%);
+  }
+
+  .oc-surface-popover {
+    border: 1px solid rgba(142, 152, 169, 0.2);
+    background: rgba(11, 13, 18, 0.78);
+    box-shadow: 0 18px 42px rgba(0, 0, 0, 0.34);
+    backdrop-filter: blur(18px) saturate(135%);
+  }
+
+  .oc-control {
+    border: 1px solid rgba(142, 152, 169, 0.14);
+    background: rgba(17, 19, 24, 0.2);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+    backdrop-filter: blur(10px) saturate(125%);
+  }
+
+  .oc-empty-panel {
+    border: 1px dashed rgba(142, 152, 169, 0.18);
+    background: rgba(17, 19, 24, 0.18);
+    backdrop-filter: blur(12px) saturate(125%);
+  }
+}
+
+.bg-\[\#111318\] {
+  background-color: rgba(17, 19, 24, 0.32) !important;
+  backdrop-filter: blur(14px) saturate(128%);
+}
+
+.bg-\[\#171A21\] {
+  background-color: rgba(23, 26, 33, 0.22) !important;
+  backdrop-filter: blur(12px) saturate(124%);
+}
+
+.bg-\[\#0E1015\] {
+  background-color: rgba(14, 16, 21, 0.24) !important;
+  backdrop-filter: blur(12px) saturate(124%);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0B0D10;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1E222C;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #272B36;
+}
+
+/* Selection */
+::selection {
+  background: rgba(46, 195, 229, 0.3);
+  color: #F2F5FA;
+}
+
+/* Focus styles */
+:focus-visible {
+  outline: 2px solid rgba(46, 195, 229, 0.6);
+  outline-offset: 2px;
+}
+
+/* Monospace font for numbers */
+.font-mono {
+  font-family: "JetBrains Mono", "Fira Code", "SF Mono", monospace;
+}
+
+/* Animation for pulsing dots */
+@keyframes pulse-dot {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.animate-pulse-dot {
+  animation: pulse-dot 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Card hover effect */
+.card-hover {
+  transition: transform 0.15s ease, border-color 0.15s ease;
+}
+
+.card-hover:hover {
+  transform: translateY(-2px);
+  border-color: rgba(142, 152, 169, 0.22);
+}
+
+/* Table row hover */
+.table-row-hover {
+  transition: background-color 0.15s ease;
+}
+
+.table-row-hover:hover {
+  background-color: rgba(23, 26, 33, 0.5);
+}
+
+/* Status colors */
+.status-ok {
+  color: #27C587;
+}
+
+.status-warning {
+  color: #F6B046;
+}
+
+.status-danger {
+  color: #F24E4E;
+}
+
+.status-info {
+  color: #2EC3E5;
+}
+
+/* Background colors for status */
+.bg-status-ok {
+  background-color: rgba(39, 197, 135, 0.15);
+}
+
+.bg-status-warning {
+  background-color: rgba(246, 176, 70, 0.15);
+}
+
+.bg-status-danger {
+  background-color: rgba(242, 78, 78, 0.15);
+}
+
+.bg-status-info {
+  background-color: rgba(46, 195, 229, 0.15);
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
