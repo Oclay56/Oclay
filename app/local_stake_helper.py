@@ -1,0 +1,563 @@
+from __future__ import annotations
+
+import argparse
+import asyncio
+import os
+import socket
+import subprocess
+import time
+from pathlib import Path
+from typing import Any
+
+from .local_ui_bridge import (
+    STAKE_CLEAR_SIDEBAR_JOB_TYPE,
+    STAKE_MLB_GAMES_JOB_TYPE,
+    STAKE_REMOVE_SIDEBAR_GROUP_JOB_TYPE,
+    STAKE_SGM_BOARD_BATCH_JOB_TYPE,
+    STAKE_SGM_CLEAR_SELECTIONS_JOB_TYPE,
+    STAKE_SGM_BOARD_JOB_TYPE,
+    STAKE_SGM_BUILD_SLIP_BATCH_JOB_TYPE,
+    STAKE_SGM_BUILD_SLIP_JOB_TYPE,
+    STAKE_UI_STATE_JOB_TYPE,
+    SupabaseLocalUiJobStore,
+)
+from .stake_sgm_browser import (
+    DEFAULT_CDP_URL,
+    build_stake_sgm_review_slip_batch,
+    build_stake_sgm_review_slip,
+    clear_stake_sidebar,
+    clear_stake_sgm_selections,
+    read_stake_mlb_games,
+    read_stake_sgm_board,
+    read_stake_sgm_boards_batch,
+    read_stake_ui_state,
+    remove_stake_sidebar_group,
+)
+from .supabase_cache import (
+    DEFAULT_JOB_RETENTION_HOURS,
+    DEFAULT_LOCAL_UI_JOB_TABLE,
+    DEFAULT_STALE_RUNNING_MINUTES,
+    run_cleanup,
+)
+
+
+DEFAULT_CHROME_USER_DATA_DIR = Path("data") / "chrome-stake-ui"
+DEFAULT_STAKE_BET_CHROME_USER_DATA_DIR = Path("data") / "chrome-stake-ui-bet"
+DEFAULT_STAKE_START_URL = "https://stake.com"
+DEFAULT_STAKE_BET_START_URL = "https://stake.bet"
+DEFAULT_STAKE_BET_CDP_URL = "http://127.0.0.1:9223"
+DEFAULT_AUTO_CLEANUP_MINUTES = 60.0
+
+
+async def run_helper(
+    *,
+    cdp_url: str = DEFAULT_CDP_URL,
+    poll_seconds: float = 2.0,
+    worker_id: str | None = None,
+    autostart_chrome: bool = True,
+    mode: str = "review",
+    auto_cleanup_minutes: float = DEFAULT_AUTO_CLEANUP_MINUTES,
+    stake_base_url: str | None = None,
+    chrome_profile: Path | str | None = None,
+    stake_start_url: str | None = None,
+) -> None:
+    _load_dotenv()
+    resolved_base_url = _clean_stake_base_url(
+        stake_base_url or os.getenv("AZP_STAKE_BASE_URL")
+    )
+    os.environ["AZP_STAKE_BASE_URL"] = resolved_base_url
+    if stake_start_url:
+        os.environ["AZP_STAKE_START_URL"] = _clean_stake_start_url(stake_start_url, resolved_base_url)
+    if chrome_profile:
+        os.environ["AZP_STAKE_CHROME_PROFILE"] = str(chrome_profile)
+    store = SupabaseLocalUiJobStore()
+    if not store.enabled():
+        raise RuntimeError(
+            "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required before starting "
+            "the local AZP helper."
+        )
+
+    if autostart_chrome:
+        ensure_debug_chrome(
+            cdp_url,
+            profile_dir=Path(chrome_profile) if chrome_profile else None,
+            start_url=stake_start_url or resolved_base_url,
+        )
+
+    resolved_worker_id = worker_id or f"azp-local-{socket.gethostname()}"
+    job_types = _job_types_for_mode(mode)
+    print("AZP Local Helper")
+    print(f"Status: waiting for Stake UI jobs as {resolved_worker_id}")
+    print(f"Mode: {mode} ({', '.join(job_types)})")
+    print(f"Stake site: {resolved_base_url}")
+    print("Stop: press Ctrl+C in this window.")
+    cleanup_interval_seconds = max(auto_cleanup_minutes, 0.0) * 60
+    next_cleanup_at = 0.0
+    if cleanup_interval_seconds:
+        await _run_supabase_cache_cleanup("startup")
+        next_cleanup_at = time.monotonic() + cleanup_interval_seconds
+
+    while True:
+        try:
+            if cleanup_interval_seconds and time.monotonic() >= next_cleanup_at:
+                await _run_supabase_cache_cleanup("scheduled")
+                next_cleanup_at = time.monotonic() + cleanup_interval_seconds
+
+            job = None
+            for job_type in job_types:
+                job = await store.claim_next_pending_job(
+                    worker_id=resolved_worker_id,
+                    job_type=job_type,
+                )
+                if job:
+                    break
+            if not job:
+                await asyncio.sleep(max(poll_seconds, 0.5))
+                continue
+
+            await process_job(store, job, cdp_url=cdp_url)
+        except Exception as exc:
+            print(
+                f"[{time.strftime('%H:%M:%S')}] Helper poll error: {exc}. "
+                f"Retrying in {max(poll_seconds, 2.0):.0f}s."
+            )
+            await asyncio.sleep(max(poll_seconds, 2.0))
+
+
+async def process_job(
+    store: SupabaseLocalUiJobStore,
+    job: dict[str, Any],
+    *,
+    cdp_url: str = DEFAULT_CDP_URL,
+) -> None:
+    job_id = str(job["jobId"])
+    job_type = str(job.get("jobType") or "")
+    request = job.get("request") or {}
+    fixture_slug = str(request.get("fixtureSlug") or "").strip()
+    fixture_optional_types = {
+        STAKE_MLB_GAMES_JOB_TYPE,
+        STAKE_SGM_BOARD_BATCH_JOB_TYPE,
+        STAKE_SGM_BUILD_SLIP_BATCH_JOB_TYPE,
+        STAKE_UI_STATE_JOB_TYPE,
+        STAKE_SGM_CLEAR_SELECTIONS_JOB_TYPE,
+        STAKE_REMOVE_SIDEBAR_GROUP_JOB_TYPE,
+        STAKE_CLEAR_SIDEBAR_JOB_TYPE,
+    }
+    if job_type not in fixture_optional_types and not fixture_slug:
+        await store.fail_job(job_id, "Job request is missing fixtureSlug.")
+        return
+
+    label = _job_label(job_type)
+    detail = fixture_slug or f"{len(request.get('groups') or [])} groups"
+    print(f"[{time.strftime('%H:%M:%S')}] {label}: {detail}")
+    try:
+        if job_type == STAKE_MLB_GAMES_JOB_TYPE:
+            result = await asyncio.to_thread(
+                read_stake_mlb_games,
+                cdp_url=cdp_url,
+                limit=int(request.get("limit") or 50),
+            )
+        elif job_type == STAKE_SGM_BOARD_BATCH_JOB_TYPE:
+            result = await asyncio.to_thread(
+                read_stake_sgm_boards_batch,
+                fixture_slugs=list(request.get("fixtureSlugs") or []),
+                cdp_url=cdp_url,
+                max_fixtures=int(request.get("maxFixtures") or 20),
+            )
+        elif job_type == STAKE_UI_STATE_JOB_TYPE:
+            result = await asyncio.to_thread(
+                read_stake_ui_state,
+                cdp_url=cdp_url,
+                fixture_slug=fixture_slug or None,
+            )
+        elif job_type == STAKE_SGM_CLEAR_SELECTIONS_JOB_TYPE:
+            result = await asyncio.to_thread(
+                clear_stake_sgm_selections,
+                cdp_url=cdp_url,
+                fixture_slug=fixture_slug or None,
+            )
+        elif job_type == STAKE_REMOVE_SIDEBAR_GROUP_JOB_TYPE:
+            result = await asyncio.to_thread(
+                remove_stake_sidebar_group,
+                cdp_url=cdp_url,
+                fixture_slug=fixture_slug or None,
+                matchup=str(request.get("matchup") or "").strip() or None,
+                row_id=str(request.get("rowId") or "").strip() or None,
+                team=str(request.get("team") or "").strip() or None,
+            )
+        elif job_type == STAKE_CLEAR_SIDEBAR_JOB_TYPE:
+            result = await asyncio.to_thread(
+                clear_stake_sidebar,
+                cdp_url=cdp_url,
+            )
+        elif job_type == STAKE_SGM_BUILD_SLIP_BATCH_JOB_TYPE:
+            result = await asyncio.to_thread(
+                build_stake_sgm_review_slip_batch,
+                list(request.get("groups") or []),
+                continue_on_group_failure=bool(request.get("continueOnGroupFailure")),
+                min_groups_required=request.get("minGroupsRequired"),
+                execution_timeout_seconds=request.get("localExecutionTimeoutSeconds"),
+                cdp_url=cdp_url,
+            )
+        elif job_type == STAKE_SGM_BUILD_SLIP_JOB_TYPE:
+            result = await asyncio.to_thread(
+                build_stake_sgm_review_slip,
+                fixture_slug,
+                list(request.get("selections") or []),
+                fallback_selections=list(request.get("fallbackSelections") or []),
+                required_legs=request.get("requiredLegs"),
+                execution_timeout_seconds=request.get("localExecutionTimeoutSeconds"),
+                cdp_url=cdp_url,
+            )
+        else:
+            result = await asyncio.to_thread(
+                read_stake_sgm_board,
+                fixture_slug,
+                cdp_url=cdp_url,
+            )
+        result["request"] = request
+        if await _safe_complete_job(store, job_id, result):
+            print(f"[{time.strftime('%H:%M:%S')}] Completed job {job_id}")
+        else:
+            print(f"[{time.strftime('%H:%M:%S')}] Completed locally but could not sync job {job_id}")
+    except Exception as exc:
+        await _safe_fail_job(store, job_id, str(exc))
+        print(f"[{time.strftime('%H:%M:%S')}] Failed job {job_id}: {exc}")
+
+
+async def _safe_complete_job(
+    store: SupabaseLocalUiJobStore,
+    job_id: str,
+    result: dict[str, Any],
+) -> bool:
+    try:
+        await store.complete_job(job_id, result)
+        return True
+    except Exception as exc:
+        print(f"[{time.strftime('%H:%M:%S')}] Could not report completed job {job_id}: {exc}")
+        return False
+
+
+async def _safe_fail_job(
+    store: SupabaseLocalUiJobStore,
+    job_id: str,
+    error_message: str,
+) -> None:
+    try:
+        await store.fail_job(job_id, error_message)
+    except Exception as exc:
+        print(f"[{time.strftime('%H:%M:%S')}] Could not report failed job {job_id}: {exc}")
+
+
+def ensure_debug_chrome(
+    cdp_url: str = DEFAULT_CDP_URL,
+    *,
+    profile_dir: Path | None = None,
+    start_url: str | None = None,
+) -> None:
+    cdp_ready = _cdp_is_ready(cdp_url)
+    chrome_path = _chrome_path()
+    if not chrome_path:
+        if cdp_ready:
+            return
+        raise RuntimeError(
+            "Could not find Chrome. Set AZP_CHROME_PATH to chrome.exe and retry."
+        )
+
+    resolved_profile_dir = profile_dir or _stake_chrome_profile_dir()
+    resolved_profile_dir.mkdir(parents=True, exist_ok=True)
+    port = _cdp_port(cdp_url)
+    if cdp_ready:
+        _open_visible_stake_chrome(
+            chrome_path,
+            resolved_profile_dir,
+            port,
+            start_url=start_url,
+        )
+        return
+
+    _open_visible_stake_chrome(chrome_path, resolved_profile_dir, port, start_url=start_url)
+
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        if _cdp_is_ready(cdp_url):
+            return
+        time.sleep(0.5)
+    raise RuntimeError("Chrome did not expose the remote debugging port in time.")
+
+
+def _open_visible_stake_chrome(
+    chrome_path: Path,
+    profile_dir: Path,
+    port: int,
+    *,
+    start_url: str | None = None,
+) -> None:
+    subprocess.Popen(
+        _debug_chrome_args(chrome_path, profile_dir, port, start_url=start_url),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def _debug_chrome_args(
+    chrome_path: Path,
+    profile_dir: Path,
+    port: int,
+    *,
+    start_url: str | None = None,
+) -> list[str]:
+    resolved_start_url = _clean_stake_start_url(
+        start_url or os.getenv("AZP_STAKE_START_URL"),
+        _clean_stake_base_url(os.getenv("AZP_STAKE_BASE_URL")),
+    )
+    return [
+        str(chrome_path),
+        f"--remote-debugging-port={port}",
+        f"--user-data-dir={profile_dir.resolve()}",
+        "--new-window",
+        "--start-maximized",
+        "--window-size=1400,900",
+        "--window-position=80,40",
+        resolved_start_url,
+    ]
+
+
+def _clean_stake_base_url(value: str | None) -> str:
+    raw = str(value or os.getenv("AZP_STAKE_BASE_URL") or DEFAULT_STAKE_START_URL).strip()
+    if not raw:
+        raw = DEFAULT_STAKE_START_URL
+    if "://" not in raw:
+        raw = f"https://{raw}"
+    host = raw.split("://", 1)[1].split("/", 1)[0].strip().lower()
+    if host in {"stake.bet", "bet"}:
+        return DEFAULT_STAKE_BET_START_URL
+    return DEFAULT_STAKE_START_URL
+
+
+def _clean_stake_start_url(value: str | None, base_url: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return base_url
+    if "://" not in raw:
+        raw = f"https://{raw}"
+    if not raw.lower().startswith(base_url.lower()):
+        return base_url
+    return raw
+
+
+def _stake_chrome_profile_dir() -> Path:
+    configured = os.getenv("AZP_STAKE_CHROME_PROFILE")
+    if configured:
+        return Path(configured)
+    base_url = _clean_stake_base_url(os.getenv("AZP_STAKE_BASE_URL"))
+    if base_url == DEFAULT_STAKE_BET_START_URL:
+        return DEFAULT_STAKE_BET_CHROME_USER_DATA_DIR
+    return DEFAULT_CHROME_USER_DATA_DIR
+
+
+async def _run_supabase_cache_cleanup(reason: str) -> None:
+    try:
+        result = await asyncio.to_thread(_run_supabase_cache_cleanup_sync)
+    except Exception as exc:
+        print(f"[{time.strftime('%H:%M:%S')}] Supabase cleanup skipped ({reason}): {exc}")
+        return
+    print(
+        f"[{time.strftime('%H:%M:%S')}] Supabase cleanup ({reason}): "
+        f"expired {result['expiredJobs']}, deleted {result['deletedJobs']}"
+    )
+
+
+def _run_supabase_cache_cleanup_sync() -> dict[str, Any]:
+    supabase_url = os.getenv("SUPABASE_URL")
+    service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_SERVICE_KEY")
+    if not supabase_url or not service_key:
+        raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required.")
+    return run_cleanup(
+        supabase_url=supabase_url,
+        service_key=service_key,
+        table_name=os.getenv("AZP_LOCAL_UI_JOB_TABLE", DEFAULT_LOCAL_UI_JOB_TABLE),
+        retention_hours=_env_float(
+            "AZP_SUPABASE_JOB_RETENTION_HOURS",
+            DEFAULT_JOB_RETENTION_HOURS,
+        ),
+        stale_running_minutes=_env_float(
+            "AZP_SUPABASE_STALE_JOB_MINUTES",
+            DEFAULT_STALE_RUNNING_MINUTES,
+        ),
+    )
+
+
+def _cdp_is_ready(cdp_url: str) -> bool:
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(f"{cdp_url.rstrip('/')}/json/version", timeout=2) as response:
+            return response.status == 200
+    except Exception:
+        return False
+
+
+def _cdp_port(cdp_url: str) -> int:
+    return int(cdp_url.rstrip("/").rsplit(":", 1)[-1])
+
+
+def _chrome_path() -> Path | None:
+    configured = os.getenv("AZP_CHROME_PATH")
+    candidates = [
+        Path(configured) if configured else None,
+        Path(os.environ.get("ProgramFiles", "")) / "Google/Chrome/Application/chrome.exe",
+        Path(os.environ.get("ProgramFiles(x86)", "")) / "Google/Chrome/Application/chrome.exe",
+        Path(os.environ.get("LocalAppData", "")) / "Google/Chrome/Application/chrome.exe",
+    ]
+    for candidate in candidates:
+        if candidate and candidate.exists():
+            return candidate
+    return None
+
+
+def _job_types_for_mode(mode: str) -> list[str]:
+    normalized = str(mode or "review").strip().lower()
+    if normalized == "build":
+        return [
+            STAKE_MLB_GAMES_JOB_TYPE,
+            STAKE_UI_STATE_JOB_TYPE,
+            STAKE_SGM_BOARD_JOB_TYPE,
+            STAKE_SGM_BOARD_BATCH_JOB_TYPE,
+            STAKE_SGM_CLEAR_SELECTIONS_JOB_TYPE,
+            STAKE_REMOVE_SIDEBAR_GROUP_JOB_TYPE,
+            STAKE_CLEAR_SIDEBAR_JOB_TYPE,
+            STAKE_SGM_BUILD_SLIP_JOB_TYPE,
+            STAKE_SGM_BUILD_SLIP_BATCH_JOB_TYPE,
+        ]
+    if normalized == "all":
+        return [
+            STAKE_MLB_GAMES_JOB_TYPE,
+            STAKE_UI_STATE_JOB_TYPE,
+            STAKE_SGM_BOARD_JOB_TYPE,
+            STAKE_SGM_BOARD_BATCH_JOB_TYPE,
+            STAKE_SGM_CLEAR_SELECTIONS_JOB_TYPE,
+            STAKE_REMOVE_SIDEBAR_GROUP_JOB_TYPE,
+            STAKE_CLEAR_SIDEBAR_JOB_TYPE,
+            STAKE_SGM_BUILD_SLIP_JOB_TYPE,
+            STAKE_SGM_BUILD_SLIP_BATCH_JOB_TYPE,
+        ]
+    return [
+        STAKE_MLB_GAMES_JOB_TYPE,
+        STAKE_UI_STATE_JOB_TYPE,
+        STAKE_SGM_BOARD_JOB_TYPE,
+        STAKE_SGM_BOARD_BATCH_JOB_TYPE,
+    ]
+
+
+def _job_label(job_type: str) -> str:
+    if job_type == STAKE_MLB_GAMES_JOB_TYPE:
+        return "Reading Stake MLB games"
+    if job_type == STAKE_UI_STATE_JOB_TYPE:
+        return "Reading Stake UI state"
+    if job_type == STAKE_SGM_BOARD_BATCH_JOB_TYPE:
+        return "Reading batch Stake SGM boards"
+    if job_type == STAKE_SGM_CLEAR_SELECTIONS_JOB_TYPE:
+        return "Clearing SGM selections"
+    if job_type == STAKE_REMOVE_SIDEBAR_GROUP_JOB_TYPE:
+        return "Removing sidebar group"
+    if job_type == STAKE_CLEAR_SIDEBAR_JOB_TYPE:
+        return "Clearing sidebar"
+    if job_type == STAKE_SGM_BUILD_SLIP_BATCH_JOB_TYPE:
+        return "Building batch review slip"
+    if job_type == STAKE_SGM_BUILD_SLIP_JOB_TYPE:
+        return "Building review slip"
+    return "Reading Stake SGM"
+
+
+def _load_dotenv(path: Path | None = None) -> None:
+    env_path = path or Path.cwd() / ".env"
+    if not env_path.exists():
+        return
+
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def main() -> int:
+    _load_dotenv()
+    parser = argparse.ArgumentParser(description="Run the AZP local Stake UI helper.")
+    parser.add_argument("--cdp-url", default=DEFAULT_CDP_URL)
+    parser.add_argument("--poll-seconds", type=float, default=2.0)
+    parser.add_argument("--worker-id")
+    parser.add_argument("--no-autostart-chrome", action="store_true")
+    parser.add_argument(
+        "--stake-base-url",
+        default=os.getenv("AZP_STAKE_BASE_URL") or DEFAULT_STAKE_START_URL,
+        help="Stake web base URL for UI automation: https://stake.com or https://stake.bet.",
+    )
+    parser.add_argument(
+        "--stake-start-url",
+        default=os.getenv("AZP_STAKE_START_URL"),
+        help="Optional start URL inside the selected Stake domain.",
+    )
+    parser.add_argument(
+        "--chrome-profile",
+        default=os.getenv("AZP_STAKE_CHROME_PROFILE"),
+        help="Chrome user data directory for this Stake domain/profile.",
+    )
+    parser.add_argument("--no-auto-cleanup", action="store_true")
+    parser.add_argument(
+        "--auto-cleanup-minutes",
+        type=float,
+        default=_env_float("AZP_SUPABASE_AUTO_CLEANUP_MINUTES", DEFAULT_AUTO_CLEANUP_MINUTES),
+        help="Run Supabase local UI job cleanup on this interval while the helper is open.",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["review", "build", "all"],
+        default="review",
+        help="review reads UI boards only; build also processes review-only slip build jobs.",
+    )
+    args = parser.parse_args()
+
+    try:
+        asyncio.run(
+            run_helper(
+                cdp_url=args.cdp_url,
+                poll_seconds=args.poll_seconds,
+                worker_id=args.worker_id,
+                autostart_chrome=not args.no_autostart_chrome,
+                mode=args.mode,
+                stake_base_url=args.stake_base_url,
+                chrome_profile=args.chrome_profile,
+                stake_start_url=args.stake_start_url,
+                auto_cleanup_minutes=0.0
+                if args.no_auto_cleanup
+                else args.auto_cleanup_minutes,
+            )
+        )
+        return 0
+    except KeyboardInterrupt:
+        print("AZP Local Helper stopped.")
+        return 0
+    except Exception as exc:
+        print(f"AZP Local Helper error: {exc}")
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
