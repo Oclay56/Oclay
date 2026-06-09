@@ -1,5 +1,6 @@
 from app.local_helper_cli import APP_DISPLAY_NAME
 from app.local_helper_tui import (
+    MENU_FOOTER_CUSHION_HEIGHT,
     build_tui_actions,
     format_tui_action_row,
     rich_title_row,
@@ -36,6 +37,10 @@ def test_oclay_tui_keeps_two_bracket_row_format():
 def test_oclay_branding_uses_display_name():
     assert APP_DISPLAY_NAME == "Oclay"
     assert "Oclay" in rich_title_row("ready").plain
+
+
+def test_oclay_footer_cushion_keeps_footer_lifted():
+    assert MENU_FOOTER_CUSHION_HEIGHT == 5
 
 
 def test_textual_dependency_probe_shape():

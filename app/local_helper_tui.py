@@ -60,6 +60,7 @@ TITLE_ROW_WIDTH = 106
 OUTPUT_PANEL_WIDTH = 104
 OUTPUT_VISIBLE_HEIGHT = 7
 OUTPUT_TEXT_WIDTH = 98
+MENU_FOOTER_CUSHION_HEIGHT = 5
 ENABLE_MOUSE_INPUT = 0x0010
 ENABLE_QUICK_EDIT_MODE = 0x0040
 ENABLE_EXTENDED_FLAGS = 0x0080
@@ -386,7 +387,7 @@ if TEXTUAL_AVAILABLE:
         }}
 
         #shell-bottom-fill {{
-            height: 1fr;
+            height: {MENU_FOOTER_CUSHION_HEIGHT};
             background: {DEFAULT_TUI_PALETTE["panel"]};
         }}
 
