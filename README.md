@@ -2,8 +2,6 @@
 
 Oclay is a simplified AI-led MLB review-slip system built from the useful Stake-GPT core. It keeps the Stake board reader, MLB context, market-neutral SGM candidate logic, rowId validation, Chrome helper, Supabase UI-job bridge, and Render/FastAPI deployment path.
 
-Oclay deliberately removes the heavier Historic, Analysis, M/L, local AI chat, and backtesting layers. The Custom GPT remains the final pick decision maker; the backend validates, scores, explains, and prepares review slips only.
-
 ## Local TUI
 
 Launch the same PowerShell/Textual style interface used by Stake-GPT:
