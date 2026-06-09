@@ -10,12 +10,6 @@ Use the Render service schema URL after deployment:
 https://<your-oclay-render-service>/gpt/openapi.json
 ```
 
-If `AZP_GPT_API_KEY` is set on Render, configure the Custom GPT action to send:
-
-```text
-X-AZP-API-Key: <your key>
-```
-
 ## Included Files
 
 - `custom-gpt-instructions.md`: paste or upload as the main behavior instructions.

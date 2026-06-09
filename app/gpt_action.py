@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import hmac
 import os
 import re
 from datetime import date, datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from fastapi import Header, HTTPException
+from fastapi import HTTPException
 
 from .decision_profiles import (
     build_decision_profile,
@@ -369,35 +368,7 @@ def build_gpt_action_openapi_schema(server_url: str) -> dict[str, Any]:
             },
         },
     }
-    if os.getenv("AZP_GPT_API_KEY"):
-        schema["components"] = {
-            "securitySchemes": {
-                "AzpApiKey": {
-                    "type": "apiKey",
-                    "in": "header",
-                    "name": "X-AZP-API-Key",
-                }
-            }
-        }
-        for path_item in schema["paths"].values():
-            for operation in path_item.values():
-                operation["security"] = [{"AzpApiKey": []}]
     return schema
-
-
-def require_gpt_api_key_value(provided_key: str | None) -> None:
-    configured_key = os.getenv("AZP_GPT_API_KEY")
-    if not configured_key:
-        return None
-    if provided_key and hmac.compare_digest(provided_key, configured_key):
-        return None
-    raise HTTPException(status_code=401, detail="Invalid OCLAY API key.")
-
-
-def require_gpt_api_key(
-    x_azp_api_key: str | None = Header(default=None, alias="X-AZP-API-Key"),
-) -> None:
-    return require_gpt_api_key_value(x_azp_api_key)
 
 
 async def build_matchups(

@@ -24,11 +24,7 @@ services:
         value: "1.10"
       - key: AZP_LOCAL_UI_JOB_TABLE
         value: local_ui_jobs
-      - key: STAKE_API_KEY
-        sync: false
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
-        sync: false
-      - key: AZP_GPT_API_KEY
         sync: false

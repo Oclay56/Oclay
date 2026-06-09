@@ -39,7 +39,6 @@ from .gpt_action import (
     build_prop_context_batch,
     build_prop_page,
     build_probable_pitchers,
-    require_gpt_api_key,
     build_slip_candidates,
     validate_gpt_selections,
 )
@@ -71,9 +70,8 @@ app = FastAPI(
 
 
 async def get_stake_client() -> AsyncIterator[StakeClient]:
-    api_key = os.getenv("STAKE_API_KEY") or None
     async with build_http_client() as http_client:
-        yield StakeClient(http_client=http_client, api_key=api_key)
+        yield StakeClient(http_client=http_client)
 
 
 async def get_mlb_engine() -> AsyncIterator[MLBDataEngine]:
@@ -100,7 +98,7 @@ async def health() -> dict[str, str]:
 
 
 @app.get("/gpt/health")
-async def gpt_health(_: None = Depends(require_gpt_api_key)) -> dict[str, str]:
+async def gpt_health() -> dict[str, str]:
     return {"status": "ok", "service": "oclay-data-api"}
 
 
@@ -130,7 +128,6 @@ async def gpt_openapi_schema(request: Request) -> Any:
 async def mlb_matchups(
     slate_date: date | None = Query(None, alias="date"),
     limit: int = Query(25, ge=1, le=100),
-    _: None = Depends(require_gpt_api_key),
     client: StakeClient = Depends(get_stake_client),
 ) -> Any:
     return await _call_data_sources(
@@ -145,7 +142,6 @@ async def mlb_matchups(
 @app.get("/mlb/schedule")
 async def mlb_schedule(
     slate_date: date | None = Query(None, alias="date"),
-    _: None = Depends(require_gpt_api_key),
     engine: MLBDataEngine = Depends(get_mlb_engine),
 ) -> Any:
     return await _call_data_sources(
@@ -160,7 +156,6 @@ async def mlb_schedule(
 async def mlb_schedule_stake_map(
     slate_date: date | None = Query(None, alias="date"),
     limit: int = Query(100, ge=1, le=100),
-    _: None = Depends(require_gpt_api_key),
     client: StakeClient = Depends(get_stake_client),
     engine: MLBDataEngine = Depends(get_mlb_engine),
 ) -> Any:
@@ -179,7 +174,6 @@ async def mlb_matchup_markets(
     matchup: str = Path(..., min_length=2),
     slate_date: date | None = Query(None, alias="date"),
     limit: int = Query(25, ge=1, le=100),
-    _: None = Depends(require_gpt_api_key),
     client: StakeClient = Depends(get_stake_client),
 ) -> Any:
     return await _call_data_sources(
@@ -200,7 +194,6 @@ async def mlb_matchup_props(
     market: str | None = Query(None),
     side: str = Query("any", pattern="^(any|over|under)$"),
     line_mode: str = Query("primary", alias="lineMode", pattern="^(primary|all)$"),
-    _: None = Depends(require_gpt_api_key),
     client: StakeClient = Depends(get_stake_client),
 ) -> Any:
     return await _call_data_sources(
@@ -224,7 +217,6 @@ async def mlb_matchup_board_summary(
     market: str | None = Query(None),
     side: str = Query("any", pattern="^(any|over|under)$"),
     line_mode: str = Query("primary", alias="lineMode", pattern="^(primary|all)$"),
-    _: None = Depends(require_gpt_api_key),
     client: StakeClient = Depends(get_stake_client),
 ) -> Any:
     return await _call_data_sources(
@@ -253,7 +245,6 @@ async def mlb_matchup_prop_page(
     primary_only: bool = Query(False, alias="primaryOnly"),
     playable_only: bool = Query(True, alias="playableOnly"),
     context_quality: str = Query("any", alias="contextQuality"),
-    _: None = Depends(require_gpt_api_key),
     client: StakeClient = Depends(get_stake_client),
 ) -> Any:
     return await _call_data_sources(
@@ -289,7 +280,6 @@ async def mlb_matchup_comparison_board(
     context_quality: str = Query("supported", alias="contextQuality"),
     season: int | None = Query(None, ge=1876, le=2100),
     history_limit: int = Query(15, alias="historyLimit", ge=1, le=15),
-    _: None = Depends(require_gpt_api_key),
     client: StakeClient = Depends(get_stake_client),
     engine: MLBDataEngine = Depends(get_mlb_engine),
 ) -> Any:
@@ -317,7 +307,6 @@ async def mlb_matchup_comparison_board(
 @app.post("/mlb/build-slip-candidates")
 async def mlb_build_slip_candidates(
     payload: dict[str, Any] = Body(...),
-    _: None = Depends(require_gpt_api_key),
     client: StakeClient = Depends(get_stake_client),
     engine: MLBDataEngine = Depends(get_mlb_engine),
 ) -> Any:
@@ -348,7 +337,6 @@ async def mlb_build_slip_candidates(
 @app.post("/mlb/stake-ui/mlb-games")
 async def mlb_stake_ui_mlb_games(
     payload: dict[str, Any] = Body(default_factory=dict),
-    _: None = Depends(require_gpt_api_key),
     job_store: SupabaseLocalUiJobStore = Depends(get_local_ui_job_store),
 ) -> Any:
     if not job_store.enabled():
@@ -446,7 +434,6 @@ async def mlb_stake_ui_mlb_games(
 @app.post("/mlb/stake-ui/state")
 async def mlb_stake_ui_state(
     payload: dict[str, Any] = Body(default_factory=dict),
-    _: None = Depends(require_gpt_api_key),
     job_store: SupabaseLocalUiJobStore = Depends(get_local_ui_job_store),
 ) -> Any:
     if not job_store.enabled():
@@ -528,7 +515,6 @@ async def mlb_stake_ui_state(
 @app.post("/mlb/stake-ui/clear-sgm-selections")
 async def mlb_stake_ui_clear_sgm_selections(
     payload: dict[str, Any] = Body(default_factory=dict),
-    _: None = Depends(require_gpt_api_key),
     job_store: SupabaseLocalUiJobStore = Depends(get_local_ui_job_store),
 ) -> Any:
     if not job_store.enabled():
@@ -610,7 +596,6 @@ async def mlb_stake_ui_clear_sgm_selections(
 @app.post("/mlb/stake-ui/remove-sidebar-group")
 async def mlb_stake_ui_remove_sidebar_group(
     payload: dict[str, Any] = Body(...),
-    _: None = Depends(require_gpt_api_key),
     client: StakeClient = Depends(get_stake_client),
     job_store: SupabaseLocalUiJobStore = Depends(get_local_ui_job_store),
 ) -> Any:
@@ -739,7 +724,6 @@ async def mlb_stake_ui_remove_sidebar_group(
 @app.post("/mlb/stake-ui/clear-sidebar")
 async def mlb_stake_ui_clear_sidebar(
     payload: dict[str, Any] = Body(default_factory=dict),
-    _: None = Depends(require_gpt_api_key),
     job_store: SupabaseLocalUiJobStore = Depends(get_local_ui_job_store),
 ) -> Any:
     if not job_store.enabled():
@@ -829,7 +813,6 @@ async def mlb_stake_ui_clear_sidebar(
 @app.post("/mlb/stake-ui/sgm-board")
 async def mlb_stake_ui_sgm_board(
     payload: dict[str, Any] = Body(...),
-    _: None = Depends(require_gpt_api_key),
     client: StakeClient = Depends(get_stake_client),
     job_store: SupabaseLocalUiJobStore = Depends(get_local_ui_job_store),
 ) -> Any:
@@ -963,7 +946,6 @@ async def mlb_stake_ui_sgm_board(
 @app.post("/mlb/stake-ui/sgm-candidate-pool")
 async def mlb_stake_ui_sgm_candidate_pool(
     payload: dict[str, Any] = Body(default_factory=dict),
-    _: None = Depends(require_gpt_api_key),
     client: StakeClient = Depends(get_stake_client),
     engine: MLBDataEngine = Depends(get_mlb_engine),
     job_store: SupabaseLocalUiJobStore = Depends(get_local_ui_job_store),
@@ -1148,7 +1130,6 @@ async def mlb_stake_ui_sgm_candidate_pool(
 @app.post("/mlb/stake-ui/review-slip")
 async def mlb_stake_ui_review_slip(
     payload: dict[str, Any] = Body(...),
-    _: None = Depends(require_gpt_api_key),
     client: StakeClient = Depends(get_stake_client),
     job_store: SupabaseLocalUiJobStore = Depends(get_local_ui_job_store),
 ) -> Any:
@@ -1309,7 +1290,6 @@ async def mlb_stake_ui_review_slip(
 @app.post("/mlb/stake-ui/review-slip-batch")
 async def mlb_stake_ui_review_slip_batch(
     payload: dict[str, Any] = Body(...),
-    _: None = Depends(require_gpt_api_key),
     client: StakeClient = Depends(get_stake_client),
     job_store: SupabaseLocalUiJobStore = Depends(get_local_ui_job_store),
 ) -> Any:
@@ -1440,7 +1420,6 @@ async def mlb_stake_ui_review_slip_batch(
 async def mlb_matchup_probable_pitchers(
     matchup: str = Path(..., min_length=2),
     slate_date: date | None = Query(None, alias="date"),
-    _: None = Depends(require_gpt_api_key),
     engine: MLBDataEngine = Depends(get_mlb_engine),
 ) -> Any:
     return await _call_data_sources(
@@ -1457,7 +1436,6 @@ async def mlb_matchup_market_map(
     matchup: str = Path(..., min_length=2),
     slate_date: date | None = Query(None, alias="date"),
     limit: int = Query(25, ge=1, le=100),
-    _: None = Depends(require_gpt_api_key),
     client: StakeClient = Depends(get_stake_client),
     store: GptActionStore = Depends(get_gpt_store),
 ) -> Any:
@@ -1494,7 +1472,6 @@ async def mlb_player_context(
     slate_date: date | None = Query(None, alias="date"),
     season: int | None = Query(None, ge=1876, le=2100),
     history_limit: int = Query(15, alias="historyLimit", ge=1, le=15),
-    _: None = Depends(require_gpt_api_key),
     engine: MLBDataEngine = Depends(get_mlb_engine),
 ) -> Any:
     resolved_season = season or (slate_date.year if slate_date else None)
@@ -1514,7 +1491,6 @@ async def mlb_player_recent(
     market: str | None = Query(None),
     season: int | None = Query(None, ge=1876, le=2100),
     history_limit: int = Query(15, alias="historyLimit", ge=1, le=15),
-    _: None = Depends(require_gpt_api_key),
     engine: MLBDataEngine = Depends(get_mlb_engine),
 ) -> Any:
     return await _call_data_sources(
@@ -1532,7 +1508,6 @@ async def mlb_player_season(
     player_id: int = Path(..., ge=1),
     market: str | None = Query(None),
     season: int | None = Query(None, ge=1876, le=2100),
-    _: None = Depends(require_gpt_api_key),
     engine: MLBDataEngine = Depends(get_mlb_engine),
 ) -> Any:
     return await _call_data_sources(
@@ -1554,7 +1529,6 @@ async def mlb_prop_context(
     side: str = Query("any", pattern="^(any|over|under)$"),
     season: int | None = Query(None, ge=1876, le=2100),
     history_limit: int = Query(15, alias="historyLimit", ge=1, le=15),
-    _: None = Depends(require_gpt_api_key),
     client: StakeClient = Depends(get_stake_client),
     engine: MLBDataEngine = Depends(get_mlb_engine),
 ) -> Any:
@@ -1577,7 +1551,6 @@ async def mlb_prop_context(
 @app.post("/mlb/prop-context-batch")
 async def mlb_prop_context_batch(
     payload: dict[str, Any] = Body(...),
-    _: None = Depends(require_gpt_api_key),
     client: StakeClient = Depends(get_stake_client),
     engine: MLBDataEngine = Depends(get_mlb_engine),
 ) -> Any:
@@ -1601,7 +1574,6 @@ async def mlb_prop_context_batch(
 @app.post("/mlb/validate-selections")
 async def mlb_validate_selections(
     payload: dict[str, Any] = Body(...),
-    _: None = Depends(require_gpt_api_key),
     client: StakeClient = Depends(get_stake_client),
 ) -> Any:
     matchup = _required_body_text(payload, "matchup")
@@ -1629,7 +1601,6 @@ async def legacy_gpt_mlb_matchup_prop_board(
     limit: int = Query(25, ge=1, le=100),
     markets: str | None = Query(None),
     side: str = Query("any", pattern="^(any|over|under)$"),
-    _: None = Depends(require_gpt_api_key),
     client: StakeClient = Depends(get_stake_client),
 ) -> Any:
     return await mlb_matchup_props(
@@ -1639,7 +1610,6 @@ async def legacy_gpt_mlb_matchup_prop_board(
         market=markets,
         side=side,
         line_mode="primary",
-        _=_,
         client=client,
     )
 
@@ -1654,7 +1624,6 @@ async def legacy_gpt_mlb_player_context(
     side: str = Query("any", pattern="^(any|over|under)$"),
     season: int | None = Query(None, ge=1876, le=2100),
     history_limit: int = Query(15, alias="historyLimit", ge=1, le=15),
-    _: None = Depends(require_gpt_api_key),
     client: StakeClient = Depends(get_stake_client),
     engine: MLBDataEngine = Depends(get_mlb_engine),
 ) -> Any:
@@ -1667,7 +1636,6 @@ async def legacy_gpt_mlb_player_context(
         side=side,
         season=season,
         history_limit=history_limit,
-        _=_,
         client=client,
         engine=engine,
     )
@@ -1676,10 +1644,9 @@ async def legacy_gpt_mlb_player_context(
 @app.post("/gpt/mlb/validate-selections", include_in_schema=False)
 async def legacy_gpt_mlb_validate_selections(
     payload: dict[str, Any] = Body(...),
-    _: None = Depends(require_gpt_api_key),
     client: StakeClient = Depends(get_stake_client),
 ) -> Any:
-    return await mlb_validate_selections(payload=payload, _=_, client=client)
+    return await mlb_validate_selections(payload=payload, client=client)
 
 
 async def _call_data_sources(callback: Any, *args: Any) -> Any:
