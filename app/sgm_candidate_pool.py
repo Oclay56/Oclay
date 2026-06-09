@@ -116,9 +116,8 @@ def score_sgm_candidate(
     odds = _float_or_none(candidate.get("odds"))
     context = candidate.get("context") or {}
     market_key = str(candidate.get("normalizedMarketKey") or "").replace("-", "_")
-    evidence_score = _evidence_score(context, str(candidate.get("side") or "under"))
+    raw_evidence_score = _evidence_score(context, str(candidate.get("side") or "under"))
     value_score = _value_score(odds, clean_mode)
-    mode_fit_score = _mode_fit_score(evidence_score, odds, clean_mode)
 
     odds_trap_penalty = 0.0
     quota_filler_penalty = 0.0
@@ -128,12 +127,6 @@ def score_sgm_candidate(
     risk_flags: list[str] = []
     reason_tags: list[str] = []
 
-    if odds is not None and odds < 1.15:
-        quota_filler_penalty = 18.0
-        risk_flags.append("short_odds_quota_filler")
-    if odds is not None and odds >= 4.0 and evidence_score < 55:
-        odds_trap_penalty = 26.0 if clean_mode == "longshot" else 34.0
-        risk_flags.append("high_odds_no_stat_support")
     if candidate.get("balanced") is False:
         stake_metadata_penalty += 4.0
         risk_flags.append("stake_line_unbalanced")
@@ -163,6 +156,25 @@ def score_sgm_candidate(
     elif board_freshness.get("status") == "unknown":
         reason_tags.append("stake_board_freshness_unknown")
 
+    probability_assessment = _probability_assessment(candidate, risk_flags)
+    reliability_profile = _reliability_profile(candidate, probability_assessment)
+    evidence_score = raw_evidence_score * reliability_profile["scalar"]
+    mode_fit_score = _mode_fit_score(evidence_score, odds, clean_mode)
+    probability_assessment["reliabilityScalar"] = reliability_profile["scalar"]
+    probability_assessment["reliabilityBand"] = reliability_profile["band"]
+    probability_assessment["reliabilityInputs"] = reliability_profile["inputs"]
+    probability_adjustment = _probability_score_adjustment(probability_assessment)
+    risk_flags.extend(probability_assessment.get("riskFlags") or [])
+    reason_tags.extend(probability_assessment.get("reasonTags") or [])
+    reason_tags.extend(reliability_profile.get("reasonTags") or [])
+
+    if odds is not None and odds < 1.15:
+        quota_filler_penalty = 18.0
+        risk_flags.append("short_odds_quota_filler")
+    if odds is not None and odds >= 4.0 and evidence_score < 55:
+        odds_trap_penalty = 26.0 if clean_mode == "longshot" else 34.0
+        risk_flags.append("high_odds_no_stat_support")
+
     if evidence_score >= 70:
         reason_tags.append("broader_context_supports_side")
     elif evidence_score >= 55:
@@ -174,11 +186,6 @@ def score_sgm_candidate(
         reason_tags.append("longshot_with_context_support")
     if clean_mode == "safe" and evidence_score < 70:
         risk_flags.append("safe_mode_evidence_below_strict_floor")
-
-    probability_assessment = _probability_assessment(candidate, risk_flags)
-    probability_adjustment = _probability_score_adjustment(probability_assessment)
-    risk_flags.extend(probability_assessment.get("riskFlags") or [])
-    reason_tags.extend(probability_assessment.get("reasonTags") or [])
 
     score = (
         evidence_score * 0.48
@@ -195,6 +202,7 @@ def score_sgm_candidate(
     return {
         "availabilityRole": "eligibility_only",
         "dataDepthRole": "confidence_cap_not_direct_merit_bonus",
+        "rawEvidenceScore": round(raw_evidence_score, 2),
         "evidenceScore": round(evidence_score, 2),
         "valueScore": round(value_score, 2),
         "modeFitScore": round(mode_fit_score, 2),
@@ -206,6 +214,9 @@ def score_sgm_candidate(
         "probabilityScoreAdjustment": round(probability_adjustment, 2),
         "probabilityAssessment": probability_assessment,
         "marketExposurePenalty": 0.0,
+        "reliabilityScalar": round(reliability_profile["scalar"], 4),
+        "reliabilityBand": reliability_profile["band"],
+        "reliabilityProfile": reliability_profile,
         "score": round(max(0.0, min(100.0, score)), 2),
         "reasonTags": sorted(set(reason_tags)),
         "riskFlags": sorted(set(risk_flags)),
@@ -952,6 +963,8 @@ def _probability_reliability_flags(
         flags.append("season_rate_proxy")
     if recent_rate is None:
         flags.append("recent_rate_unavailable")
+    if (recent_games or 0) < 5:
+        flags.append("recent_sample_under_5")
     if (recent_games or 0) < 10:
         flags.append("recent_sample_under_10")
     if recent_source and recent_source.endswith("_proxy"):
@@ -988,8 +1001,10 @@ def _probability_data_quality(
     reliability = set(reliability_flags)
     if reliability & required_missing:
         return "low"
-    if "recent_sample_under_10" in reliability and "season_sample_robust" not in reliability:
+    if "recent_sample_under_5" in reliability and "season_sample_robust" not in reliability:
         return "low"
+    if "recent_sample_under_10" in reliability and "season_sample_robust" not in reliability:
+        return "medium"
     medium_flags = {
         "season_rate_proxy",
         "recent_rate_proxy",
@@ -1027,12 +1042,164 @@ def _edge_status(edge: float | None, data_quality: str) -> str:
 def _probability_score_adjustment(probability: dict[str, Any]) -> float:
     if probability.get("dataQuality") == "low":
         return 0.0
-    return {
+    base = {
         "clear_possible_edge": 6.0,
         "thin_edge": 2.5,
         "no_clear_edge": -1.5,
         "negative_edge": -6.0,
     }.get(str(probability.get("edgeStatus") or ""), 0.0)
+    reliability_scalar = _float_or_none(probability.get("reliabilityScalar"))
+    if reliability_scalar is None:
+        return base
+    return round(base * max(0.0, min(reliability_scalar, 1.0)), 4)
+
+
+def _reliability_profile(
+    candidate: dict[str, Any],
+    probability_assessment: dict[str, Any],
+) -> dict[str, Any]:
+    context_quality = str(candidate.get("contextQuality") or "").strip().lower()
+    season_sample = candidate.get("seasonSample") or {}
+    recent_games = _int_or_none(((probability_assessment.get("inputs") or {}).get("recentGamesUsed")))
+    matchup_source = str((probability_assessment.get("matchupFactor") or {}).get("source") or "")
+
+    components: list[dict[str, Any]] = []
+    _append_reliability_component(
+        components,
+        name="contextQuality",
+        weight=0.15,
+        scalar=_context_quality_scalar(context_quality),
+        detail=context_quality or "unknown",
+    )
+    _append_reliability_component(
+        components,
+        name="recentSample",
+        weight=0.45,
+        scalar=_recent_sample_scalar(recent_games),
+        detail=recent_games,
+    )
+    _append_reliability_component(
+        components,
+        name="seasonSample",
+        weight=0.35,
+        scalar=_season_sample_scalar(season_sample),
+        detail={
+            "status": season_sample.get("status"),
+            "metric": season_sample.get("sampleMetric"),
+            "value": season_sample.get("sampleValue"),
+        },
+    )
+    _append_reliability_component(
+        components,
+        name="matchupContext",
+        weight=0.05,
+        scalar=_matchup_reliability_scalar(matchup_source),
+        detail=matchup_source or "unknown",
+    )
+
+    total_weight = sum(float(component["weight"]) for component in components)
+    weighted_sum = sum(
+        float(component["weight"]) * float(component["scalar"])
+        for component in components
+    )
+    scalar = weighted_sum / max(total_weight, 0.01)
+    scalar = max(0.55, min(1.0, scalar))
+    if scalar >= 0.93:
+        band = "high"
+    elif scalar >= 0.80:
+        band = "medium"
+    else:
+        band = "low"
+
+    reason_tags: list[str] = []
+    if band == "medium":
+        reason_tags.append("confidence_taper_medium")
+    elif band == "low":
+        reason_tags.append("confidence_taper_low")
+
+    return {
+        "scalar": round(scalar, 4),
+        "band": band,
+        "inputs": components,
+        "reasonTags": reason_tags,
+        "policy": "confidence_taper_not_direct_bonus",
+    }
+
+
+def _append_reliability_component(
+    components: list[dict[str, Any]],
+    *,
+    name: str,
+    weight: float,
+    scalar: float | None,
+    detail: Any,
+) -> None:
+    if scalar is None:
+        return
+    components.append(
+        {
+            "name": name,
+            "weight": round(weight, 4),
+            "scalar": round(max(0.0, min(scalar, 1.0)), 4),
+            "detail": detail,
+        }
+    )
+
+
+def _context_quality_scalar(context_quality: str) -> float:
+    return {
+        "full": 1.0,
+        "high": 1.0,
+        "strong": 1.0,
+        "supported": 0.96,
+        "medium": 0.96,
+        "partial": 0.84,
+        "low": 0.72,
+        "unsupported": 0.55,
+    }.get(context_quality, 0.78)
+
+
+def _recent_sample_scalar(recent_games: int | None) -> float | None:
+    if recent_games is None:
+        return None
+    clamped = max(0, min(recent_games, 15))
+    return 0.70 + (clamped / 15.0) * 0.30
+
+
+def _season_sample_scalar(season_sample: dict[str, Any]) -> float | None:
+    status = str(season_sample.get("status") or "").strip().lower()
+    metric = str(season_sample.get("sampleMetric") or "").strip()
+    sample_value = _float_or_none(season_sample.get("sampleValue"))
+
+    if status == "robust":
+        return 1.0
+    if status == "low_confidence":
+        if sample_value is None:
+            return 0.82
+        if metric == "inningsPitched":
+            clamped = max(0.0, min(sample_value, 20.0))
+            return 0.70 + (clamped / 20.0) * 0.26
+        if metric == "plateAppearances":
+            clamped = max(0.0, min(sample_value, 50.0))
+            return 0.70 + (clamped / 50.0) * 0.26
+        if metric == "gamesPlayed":
+            clamped = max(0.0, min(sample_value, 20.0))
+            return 0.72 + (clamped / 20.0) * 0.22
+        return 0.82
+    if status == "unknown":
+        if sample_value is None:
+            return 0.78
+        clamped = max(0.0, min(sample_value, 20.0))
+        return 0.74 + (clamped / 20.0) * 0.18
+    return None
+
+
+def _matchup_reliability_scalar(matchup_source: str) -> float | None:
+    if not matchup_source:
+        return None
+    if matchup_source == "neutral_no_matchup_context":
+        return 0.90
+    return 1.0
 
 
 def _dedupe_penalties(penalties: list[dict[str, Any]]) -> list[dict[str, Any]]:

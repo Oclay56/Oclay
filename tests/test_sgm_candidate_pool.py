@@ -481,11 +481,11 @@ def test_selected_leg_proof_includes_closest_alternative_and_rejected_alternativ
     assert proof["rejectedAlternatives"][0]["lossType"] == "lower_merit"
 
 
-def test_availability_clickability_and_data_depth_are_not_direct_merit_bonuses():
+def test_clickability_and_availability_metadata_do_not_change_score_when_context_is_same():
     context = {
-        "last10": {"sideHitRate": 0.75},
-        "last15": {"sideHitRate": 0.75},
-        "season": {"sideSupported": True},
+        "last10": {"sideHitRate": 0.75, "gamesUsed": 10},
+        "last15": {"sideHitRate": 0.75, "gamesUsed": 15},
+        "season": {"sideSupported": True, "sideMargin": 0.3},
     }
     base = score_sgm_candidate(
         {
@@ -497,6 +497,7 @@ def test_availability_clickability_and_data_depth_are_not_direct_merit_bonuses()
             "playable": True,
             "customBet": True,
             "contextQuality": "full",
+            "seasonSample": {"status": "robust"},
         },
         mode="best_available",
     )
@@ -509,7 +510,8 @@ def test_availability_clickability_and_data_depth_are_not_direct_merit_bonuses()
             "rowId": "",
             "playable": False,
             "customBet": False,
-            "contextQuality": "unsupported",
+            "contextQuality": "full",
+            "seasonSample": {"status": "robust"},
         },
         mode="best_available",
     )
@@ -517,6 +519,93 @@ def test_availability_clickability_and_data_depth_are_not_direct_merit_bonuses()
     assert changed_availability_metadata["score"] == base["score"]
     assert changed_availability_metadata["availabilityRole"] == "eligibility_only"
     assert changed_availability_metadata["dataDepthRole"] == "confidence_cap_not_direct_merit_bonus"
+
+
+def test_reliability_taper_reduces_thin_sample_scores_without_rewarding_robust_samples():
+    robust = score_sgm_candidate(
+        {
+            "odds": 2.0,
+            "side": "under",
+            "contextQuality": "full",
+            "seasonSample": {"status": "robust"},
+            "context": {
+                "last10": {"sideHitRate": 0.78, "gamesUsed": 10},
+                "last15": {"sideHitRate": 0.78, "gamesUsed": 15},
+                "season": {"sideSupported": True, "sideMargin": 0.4},
+            },
+            "normalizedMarketKey": "singles",
+        },
+        mode="best_available",
+    )
+    thinner = score_sgm_candidate(
+        {
+            "odds": 2.0,
+            "side": "under",
+            "contextQuality": "partial",
+            "seasonSample": {
+                "status": "low_confidence",
+                "sampleMetric": "plateAppearances",
+                "sampleValue": 18,
+            },
+            "context": {
+                "last10": {"sideHitRate": 0.78, "gamesUsed": 7},
+                "last15": {"sideHitRate": 0.78, "gamesUsed": 7},
+                "season": {"sideSupported": True, "sideMargin": 0.4},
+            },
+            "normalizedMarketKey": "singles",
+        },
+        mode="best_available",
+    )
+
+    assert 0.98 <= robust["reliabilityScalar"] <= 1.0
+    assert robust["reliabilityBand"] == "high"
+    assert thinner["reliabilityScalar"] < robust["reliabilityScalar"]
+    assert thinner["reliabilityBand"] in {"medium", "low"}
+    assert thinner["score"] < robust["score"]
+    assert thinner["rawEvidenceScore"] == robust["rawEvidenceScore"]
+    assert thinner["dataDepthRole"] == "confidence_cap_not_direct_merit_bonus"
+
+
+def test_medium_quality_probability_edge_tapers_instead_of_zeroing_out():
+    robust = score_sgm_candidate(
+        {
+            "odds": 2.2,
+            "side": "under",
+            "contextQuality": "full",
+            "seasonSample": {"status": "robust"},
+            "context": {
+                "last10": {"sideHitRate": 0.8, "gamesUsed": 10},
+                "last15": {"sideHitRate": 0.8, "gamesUsed": 15},
+                "season": {"sideSupported": True, "sideMargin": 0.4},
+            },
+            "normalizedMarketKey": "singles",
+        },
+        mode="best_available",
+    )
+    medium = score_sgm_candidate(
+        {
+            "odds": 2.2,
+            "side": "under",
+            "contextQuality": "partial",
+            "seasonSample": {
+                "status": "low_confidence",
+                "sampleMetric": "plateAppearances",
+                "sampleValue": 18,
+            },
+            "context": {
+                "last10": {"sideHitRate": 0.8, "gamesUsed": 7},
+                "last15": {"sideHitRate": 0.8, "gamesUsed": 7},
+                "season": {"sideSupported": True, "sideMargin": 0.4},
+            },
+            "normalizedMarketKey": "singles",
+        },
+        mode="best_available",
+    )
+
+    assert robust["probabilityAssessment"]["dataQuality"] in {"high", "medium"}
+    assert medium["probabilityAssessment"]["dataQuality"] == "medium"
+    assert robust["probabilityScoreAdjustment"] > medium["probabilityScoreAdjustment"] > 0
+    assert medium["probabilityAssessment"]["edgeStatus"] == "clear_possible_edge"
 
 
 def test_candidate_pool_ranks_context_backed_rows_and_skips_weak_per_game():
