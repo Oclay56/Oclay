@@ -22,7 +22,10 @@ from .local_helper_cli import (
 )
 
 # Solid background fill for the whole TUI (no wallpaper, no animation).
-BACKGROUND_FILL = "#1B2A3C"
+BACKGROUND_FILL = "#202A44"
+ROW_HOVER_FILL = "#354A76"
+# Visible light blue-grey rounded border around the console.
+BORDER_COLOR = "#7B86A2"
 
 try:
     from textual import events
@@ -44,19 +47,28 @@ except Exception as exc:  # pragma: no cover - depends on local optional package
 DEFAULT_TUI_PALETTE = {
     "background": BACKGROUND_FILL,
     "panel": BACKGROUND_FILL,
-    "panelBorder": "#5A5A5A",
-    "shellBorder": "#6A6A6A",
+    "panelBorder": BORDER_COLOR,
+    "shellBorder": BORDER_COLOR,
     "mutedText": "#7F7F7F",
-    "highlightText": "#B8B19C",
+    "highlightText": "#F4F6F8",
     "titleText": "#F1EED0",
     "accentText": "#A46214",
     "readyText": "#00E701",
     "activeText": "#74B9FF",
     "errorText": "#FF6B8A",
-    "rowHover": "#2A3F56",
+    "rowHover": ROW_HOVER_FILL,
     "rowText": "#B8B19C",
     "shortcutText": "#7F7F7F",
     "outputPanel": BACKGROUND_FILL,
+}
+FORCED_TUI_PALETTE = {
+    "background": BACKGROUND_FILL,
+    "panel": BACKGROUND_FILL,
+    "outputPanel": BACKGROUND_FILL,
+    "panelBorder": BORDER_COLOR,
+    "shellBorder": BORDER_COLOR,
+    "rowHover": ROW_HOVER_FILL,
+    "highlightText": "#F4F6F8",
 }
 MENU_ROW_WIDTH = 94
 TITLE_ROW_WIDTH = 106
@@ -115,10 +127,12 @@ def tui_theme_path(*, root_dir: Path = ROOT_DIR) -> Path:
 def clean_tui_palette(raw: dict[str, Any] | None = None) -> dict[str, str]:
     palette = dict(DEFAULT_TUI_PALETTE)
     if not isinstance(raw, dict):
+        palette.update(FORCED_TUI_PALETTE)
         return palette
     for key, value in raw.items():
         if key in palette and isinstance(value, str) and _is_hex_color(value):
             palette[key] = value.upper()
+    palette.update(FORCED_TUI_PALETTE)
     return palette
 
 
@@ -418,11 +432,36 @@ if TEXTUAL_AVAILABLE:
             padding: 0 0;
         }}
 
-        CommandRow:hover,
-        CommandRow.--highlight {{
+        #actions CommandRow.-highlight,
+        #actions CommandRow.--highlight,
+        #actions:focus CommandRow.-highlight,
+        #actions:focus CommandRow.--highlight,
+        #actions:focus-within CommandRow.-highlight,
+        #actions:focus-within CommandRow.--highlight {{
+            color: {DEFAULT_TUI_PALETTE["rowText"]};
+            background: transparent;
+            text-style: none;
+        }}
+
+        #actions CommandRow.-highlight .command-label,
+        #actions CommandRow.--highlight .command-label,
+        #actions:focus CommandRow.-highlight .command-label,
+        #actions:focus CommandRow.--highlight .command-label {{
+            background: transparent;
+        }}
+
+        #actions CommandRow:hover,
+        #actions CommandRow:hover.-highlight,
+        #actions CommandRow:hover.--highlight {{
             color: {DEFAULT_TUI_PALETTE["highlightText"]};
             background: {DEFAULT_TUI_PALETTE["rowHover"]};
             text-style: bold;
+        }}
+
+        #actions CommandRow:hover .command-label,
+        #actions CommandRow:hover.-highlight .command-label,
+        #actions CommandRow:hover.--highlight .command-label {{
+            background: {DEFAULT_TUI_PALETTE["rowHover"]};
         }}
 
         .command-label {{
@@ -575,8 +614,15 @@ if TEXTUAL_AVAILABLE:
             self.ui_thread = threading.current_thread()
             self._setup_state = self._read_setup_state()
             self._apply_palette()
+            self._clear_menu_cursor()
             self._refresh_layout(force=True)
             self.set_interval(0.45, self._tick)
+
+        def _clear_menu_cursor(self) -> None:
+            try:
+                self.query_one("#actions", ListView).index = None
+            except Exception:
+                pass
 
         def _apply_palette(self) -> None:
             root = self.query_one("#screen-root", Container)
@@ -625,6 +671,8 @@ if TEXTUAL_AVAILABLE:
             ):
                 self.query_one(selector, Static).styles.color = self.palette[color]
             for row in self.query(CommandRow):
+                row.styles.background = "transparent"
+                row.styles.color = self.palette["rowText"]
                 label = row.query_one(Label)
                 # Transparent so the row's hover highlight shows through the label.
                 label.styles.background = "transparent"
@@ -797,6 +845,7 @@ if TEXTUAL_AVAILABLE:
                 return
             action = getattr(event.item, "tui_action", None)
             if isinstance(action, TuiAction):
+                self._clear_menu_cursor()
                 self._run_pointer_action(action)
 
         def on_key(self, event: events.Key) -> None:
