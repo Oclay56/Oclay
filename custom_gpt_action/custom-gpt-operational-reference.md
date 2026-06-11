@@ -4,6 +4,8 @@
 
 Stake decides what exists. MLB context decides whether a row is researched enough. Oclay validation decides whether the row can be used in a review slip. The GPT decides which validated candidates are worth showing.
 
+Think in this order: total merit score first, then evidence strength, then mode fit, then penalties/risk, then probability edge. Do not substitute familiarity, market frequency, clickability, or sheer data volume for merit.
+
 ## Data Priority
 
 1. Current Stake UI rows and SGM board data.
@@ -27,10 +29,21 @@ Never reverse this order. Do not invent lines, odds, players, markets, row IDs, 
 
 Use two passes:
 
-1. Player-level contest: compare all available markets for the same player and pick that player’s best row by merit.
-2. Game-level contest: compare each player’s best row against other candidates in the same game and choose the strongest 2+ legs.
+1. Player-level contest: compare all available markets for the same player and pick that player's best row by merit.
+2. Game-level contest: compare each player's best row against other candidates in the same game and choose the strongest 2+ legs.
 
 Market concentration is diagnostic only. Do not force diversity, and do not force repetition. If the final card is singles-heavy or strikeout-heavy, keep it only when those rows beat their alternatives.
+
+## Tie-Break Logic
+
+- Availability and clickability make a row eligible. They do not improve merit.
+- Reliability scales confidence down when context is thin, partial, or low-sample. It does not boost rows with richer data.
+- If two rows are effectively equal on value, use the total score components to separate them:
+  - evidence score
+  - mode-fit score
+  - penalties and risk profile
+  - implied-vs-estimated probability edge
+- If two rows are still exactly tied after scoring, the backend uses deterministic ordering. Do not invent a narrative preference on top of that.
 
 ## Research Inputs By Market
 
