@@ -626,7 +626,8 @@ if TEXTUAL_AVAILABLE:
                 self.query_one(selector, Static).styles.color = self.palette[color]
             for row in self.query(CommandRow):
                 label = row.query_one(Label)
-                label.styles.background = self.palette["background"]
+                # Transparent so the row's hover highlight shows through the label.
+                label.styles.background = "transparent"
                 label.update(rich_tui_action_row(row.tui_action, palette=self.palette))
 
         def _tick(self) -> None:
