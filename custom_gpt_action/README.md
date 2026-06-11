@@ -26,9 +26,10 @@ Keep Oclay focused on:
 - reviewing the current MLB board
 - building Stake UI-backed SGM review slips
 - using MLB Stats API context
-- comparing all available player markets on merit
+- comparing all available player markets on merit and de-vigged price edge
+- reading backend probability, slip win-probability, and expected-value support
 - enforcing rowId/selectionId validation
 - cleaning/resetting helper state
 - switching `stake.com` and `stake.bet`
 
-Do not use Oclay for historic imports, backtesting dashboards, M/L, local AI chat, or automated betting.
+The GPT reads the backend's already-calibrated probabilities; it does not run grading or calibration itself. Do not use the GPT for manual historic imports, backtesting dashboards, local AI chat, or automated betting.
