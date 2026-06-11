@@ -21,11 +21,11 @@ from .local_helper_cli import (
     stake_site_profile,
 )
 
-# Solid background fill for the whole TUI (no wallpaper, no animation).
-BACKGROUND_FILL = "#202A44"
-ROW_HOVER_FILL = "#354A76"
-# Visible light blue-grey rounded border around the console.
-BORDER_COLOR = "#7B86A2"
+BACKGROUND_FILL = "#111111"
+PANEL_FILL = "#101010"
+PANEL_BORDER_COLOR = "#5A5A5A"
+SHELL_BORDER_COLOR = "#6A6A6A"
+ROW_HOVER_FILL = "#3A3A3A"
 
 try:
     from textual import events
@@ -46,11 +46,11 @@ except Exception as exc:  # pragma: no cover - depends on local optional package
 
 DEFAULT_TUI_PALETTE = {
     "background": BACKGROUND_FILL,
-    "panel": BACKGROUND_FILL,
-    "panelBorder": BORDER_COLOR,
-    "shellBorder": BORDER_COLOR,
+    "panel": PANEL_FILL,
+    "panelBorder": PANEL_BORDER_COLOR,
+    "shellBorder": SHELL_BORDER_COLOR,
     "mutedText": "#7F7F7F",
-    "highlightText": "#F4F6F8",
+    "highlightText": "#B8B19C",
     "titleText": "#F1EED0",
     "accentText": "#A46214",
     "readyText": "#00E701",
@@ -59,16 +59,13 @@ DEFAULT_TUI_PALETTE = {
     "rowHover": ROW_HOVER_FILL,
     "rowText": "#B8B19C",
     "shortcutText": "#7F7F7F",
-    "outputPanel": BACKGROUND_FILL,
+    "outputPanel": PANEL_FILL,
 }
-FORCED_TUI_PALETTE = {
-    "background": BACKGROUND_FILL,
-    "panel": BACKGROUND_FILL,
-    "outputPanel": BACKGROUND_FILL,
-    "panelBorder": BORDER_COLOR,
-    "shellBorder": BORDER_COLOR,
+PINNED_TUI_PALETTE = {
+    "panelBorder": PANEL_BORDER_COLOR,
+    "shellBorder": SHELL_BORDER_COLOR,
     "rowHover": ROW_HOVER_FILL,
-    "highlightText": "#F4F6F8",
+    "highlightText": "#B8B19C",
 }
 MENU_ROW_WIDTH = 94
 TITLE_ROW_WIDTH = 106
@@ -82,22 +79,6 @@ ENABLE_EXTENDED_FLAGS = 0x0080
 ENABLE_WINDOW_INPUT = 0x0008
 ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200
 STD_INPUT_HANDLE = -10
-PALETTE_COLOR_CHOICES = (
-    "#0A0A0A",
-    "#111111",
-    "#161616",
-    "#1A1A1A",
-    "#202020",
-    "#262626",
-    "#2D2D2D",
-    "#333333",
-    "#3A3A3A",
-    "#454545",
-    "#4F4F4F",
-    "#5A5A5A",
-)
-
-
 @dataclass(frozen=True)
 class TuiAction:
     action_id: str
@@ -114,6 +95,7 @@ TUI_ACTIONS: tuple[TuiAction, ...] = (
     TuiAction("build", "Build", "ctrl+b", "Open builder mode for validated slips.", "build", "Building"),
     TuiAction("clean", "Clean", "ctrl+c", "Clear rebuildable cache.", "clean", "Cleaning"),
     TuiAction("domain", "Domain", "ctrl+q", "Toggle Stake domain profile.", "domain", "Switching domain"),
+    TuiAction("rgb", "RGB", "ctrl+g", "Tune TUI background colors.", "rgb", "RGB"),
     TuiAction("stop", "Stop", "ctrl+s", "Stop the active helper task.", "stop", "Stop"),
     TuiAction("exit", "Exit", "ctrl+e", "Close the TUI.", "exit", "Exiting"),
 )
@@ -127,12 +109,13 @@ def tui_theme_path(*, root_dir: Path = ROOT_DIR) -> Path:
 def clean_tui_palette(raw: dict[str, Any] | None = None) -> dict[str, str]:
     palette = dict(DEFAULT_TUI_PALETTE)
     if not isinstance(raw, dict):
-        palette.update(FORCED_TUI_PALETTE)
+        palette.update(PINNED_TUI_PALETTE)
         return palette
     for key, value in raw.items():
         if key in palette and isinstance(value, str) and _is_hex_color(value):
             palette[key] = value.upper()
-    palette.update(FORCED_TUI_PALETTE)
+    palette["outputPanel"] = palette["panel"]
+    palette.update(PINNED_TUI_PALETTE)
     return palette
 
 
@@ -214,14 +197,23 @@ def rich_tui_action_row(
     *,
     width: int = MENU_ROW_WIDTH,
     palette: dict[str, str] | None = None,
+    hovered: bool = False,
 ) -> Text:
     colors = clean_tui_palette(palette)
     row = format_tui_action_row(action, width=width)
-    text = Text(row, style=colors["shortcutText"])
+    if hovered:
+        base_style = f"{colors['shortcutText']} on {colors['rowHover']}"
+        label_style = f"bold {colors['highlightText']} on {colors['rowHover']}"
+        shortcut_style = f"{colors['shortcutText']} on {colors['rowHover']}"
+    else:
+        base_style = colors["shortcutText"]
+        label_style = f"bold {colors['rowText']}"
+        shortcut_style = colors["shortcutText"]
+    text = Text(row, style=base_style)
     label_start = 2
     label_end = label_start + len(action.label)
-    text.stylize(f"bold {colors['rowText']}", label_start, label_end)
-    text.stylize(colors["shortcutText"], max(0, row.rfind(action.shortcut)), len(row) - 1)
+    text.stylize(label_style, label_start, label_end)
+    text.stylize(shortcut_style, max(0, row.rfind(action.shortcut)), len(row) - 1)
     return text
 
 
@@ -311,6 +303,76 @@ def _is_hex_color(value: str) -> bool:
     return all(char in "0123456789abcdefABCDEF" for char in text[1:])
 
 
+def _clamp_rgb_value(value: int) -> int:
+    return max(0, min(255, int(value)))
+
+
+def rgb_to_hex(r: int, g: int, b: int) -> str:
+    return f"#{_clamp_rgb_value(r):02X}{_clamp_rgb_value(g):02X}{_clamp_rgb_value(b):02X}"
+
+
+def hex_to_rgb(value: str) -> tuple[int, int, int]:
+    clean = value.strip()
+    if not _is_hex_color(clean):
+        clean = DEFAULT_TUI_PALETTE["background"]
+    return int(clean[1:3], 16), int(clean[3:5], 16), int(clean[5:7], 16)
+
+
+def rgb_target_label(target_id: str) -> str:
+    return "Background" if target_id == "background" else "Center Console"
+
+
+def rich_rgb_target_row(
+    target_id: str,
+    *,
+    selected: bool = False,
+    palette: dict[str, str] | None = None,
+    width: int = MENU_ROW_WIDTH,
+) -> Text:
+    colors = clean_tui_palette(palette)
+    label = rgb_target_label(target_id)
+    color_key = "background" if target_id == "background" else "panel"
+    color = colors[color_key]
+    left = f" {'>' if selected else ' '} {label}"
+    right = f"{color} "
+    inner_width = max(width - 2, 24)
+    row = f"[{left}{' ' * max(inner_width - len(left) - len(right), 1)}{right}]"
+    style = f"{colors['highlightText']} on {colors['rowHover']}" if selected else colors["shortcutText"]
+    text = Text(row, style=style)
+    text.stylize(
+        f"bold {colors['highlightText'] if selected else colors['rowText']}"
+        + (f" on {colors['rowHover']}" if selected else ""),
+        4,
+        4 + len(label),
+    )
+    return text
+
+
+def choose_native_rgb_color(initial_color: str, *, title: str = "OCLAY RGB") -> str | None:
+    clean_initial = initial_color.upper() if _is_hex_color(initial_color) else DEFAULT_TUI_PALETTE["background"]
+    root = None
+    try:
+        import tkinter as tk
+        from tkinter import colorchooser
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        root.update()
+        _rgb, hex_color = colorchooser.askcolor(color=clean_initial, title=title, parent=root)
+    except Exception:
+        return None
+    finally:
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:
+                pass
+    if isinstance(hex_color, str) and _is_hex_color(hex_color):
+        return hex_color.upper()
+    return None
+
+
 if TEXTUAL_AVAILABLE:
 
     class CommandRow(ListItem):
@@ -318,27 +380,47 @@ if TEXTUAL_AVAILABLE:
             self.tui_action = action
             super().__init__(Label(rich_tui_action_row(action, palette=palette), classes="command-label"))
 
+        def paint_hover(self, hovered: bool) -> None:
+            palette = getattr(self.app, "palette", DEFAULT_TUI_PALETTE)
+            background = palette["rowHover"] if hovered else palette["panel"]
+            color = palette["highlightText"] if hovered else palette["rowText"]
+            self.set_class(hovered, "menu-hover")
+            self.styles.background = background
+            self.styles.color = color
+            label = self.query_one(Label)
+            label.styles.background = background
+            label.styles.color = color
+            label.update(rich_tui_action_row(self.tui_action, palette=palette, hovered=hovered))
 
-    class PaletteTargetRow(ListItem):
-        def __init__(self, target_id: str, label: str) -> None:
+        def on_enter(self, event: events.Enter) -> None:
+            self.paint_hover(True)
+
+        def on_leave(self, event: events.Leave) -> None:
+            self.paint_hover(False)
+
+
+    class RgbTargetRow(ListItem):
+        def __init__(self, target_id: str) -> None:
             self.target_id = target_id
-            super().__init__(Label(format_tui_action_row(_palette_row_action(label)), classes="command-label"))
+            super().__init__(Label(rich_rgb_target_row(target_id), classes="command-label"))
 
-
-    class PaletteColorRow(ListItem):
-        def __init__(self, color: str) -> None:
-            self.color = color
-            super().__init__(Label(format_tui_action_row(_palette_row_action(color)), classes="command-label"))
-
-
-    def _palette_row_action(label: str) -> TuiAction:
-        return TuiAction("palette-row", label, "enter", "", "palette-row", "Palette")
+        def paint_selected(self, selected: bool) -> None:
+            palette = getattr(self.app, "palette", DEFAULT_TUI_PALETTE)
+            background = palette["rowHover"] if selected else palette["panel"]
+            color = palette["highlightText"] if selected else palette["rowText"]
+            self.set_class(selected, "target-active")
+            self.styles.background = background
+            self.styles.color = color
+            label = self.query_one(Label)
+            label.styles.background = background
+            label.styles.color = color
+            label.update(rich_rgb_target_row(self.target_id, selected=selected, palette=palette))
 
 
     class OclayTui(App[None]):
         CSS = f"""
         Screen {{
-            background: {BACKGROUND_FILL};
+            background: {DEFAULT_TUI_PALETTE["background"]};
             color: {DEFAULT_TUI_PALETTE["mutedText"]};
             overflow: hidden hidden;
         }}
@@ -348,7 +430,7 @@ if TEXTUAL_AVAILABLE:
             height: 3;
             width: 100%;
             padding: 1 1 0 1;
-            background: transparent;
+            background: {DEFAULT_TUI_PALETTE["background"]};
             color: {DEFAULT_TUI_PALETTE["mutedText"]};
         }}
 
@@ -356,13 +438,13 @@ if TEXTUAL_AVAILABLE:
             align: center middle;
             height: 1fr;
             width: 100%;
-            background: {BACKGROUND_FILL};
+            background: {DEFAULT_TUI_PALETTE["background"]};
         }}
 
         #shell-stack {{
             width: 116;
             height: 24;
-            background: {BACKGROUND_FILL};
+            background: {DEFAULT_TUI_PALETTE["background"]};
         }}
 
         #shell {{
@@ -370,8 +452,16 @@ if TEXTUAL_AVAILABLE:
             height: 22;
             max-height: 22;
             min-height: 22;
-            background: {BACKGROUND_FILL};
+            background: {DEFAULT_TUI_PALETTE["background"]};
             border: round {DEFAULT_TUI_PALETTE["shellBorder"]};
+            padding: 0 0;
+            overflow: hidden hidden;
+        }}
+
+        #shell-inner {{
+            width: 100%;
+            height: 100%;
+            background: {DEFAULT_TUI_PALETTE["panel"]};
             padding: 1 4;
             overflow: hidden hidden;
         }}
@@ -381,7 +471,7 @@ if TEXTUAL_AVAILABLE:
             width: 116;
             padding: 0 0;
             content-align: right top;
-            background: transparent;
+            background: {DEFAULT_TUI_PALETTE["background"]};
             color: {DEFAULT_TUI_PALETTE["mutedText"]};
         }}
 
@@ -405,21 +495,21 @@ if TEXTUAL_AVAILABLE:
 
         #shell-bottom-fill {{
             height: {MENU_FOOTER_CUSHION_HEIGHT};
-            background: transparent;
+            background: {DEFAULT_TUI_PALETTE["panel"]};
         }}
 
         #menu-wrap {{
             width: 100%;
             height: {MENU_ROW_COUNT};
             align: center top;
-            background: transparent;
+            background: {DEFAULT_TUI_PALETTE["panel"]};
             overflow: hidden hidden;
         }}
 
         #actions {{
             width: {MENU_ROW_WIDTH};
             height: {MENU_ROW_COUNT};
-            background: transparent;
+            background: {DEFAULT_TUI_PALETTE["panel"]};
             scrollbar-size: 0 0;
             overflow: hidden hidden;
         }}
@@ -428,46 +518,44 @@ if TEXTUAL_AVAILABLE:
             width: {MENU_ROW_WIDTH};
             height: 1;
             color: {DEFAULT_TUI_PALETTE["rowText"]};
-            background: transparent;
+            background: {DEFAULT_TUI_PALETTE["panel"]};
             padding: 0 0;
         }}
 
-        #actions CommandRow.-highlight,
-        #actions CommandRow.--highlight,
-        #actions:focus CommandRow.-highlight,
-        #actions:focus CommandRow.--highlight,
-        #actions:focus-within CommandRow.-highlight,
-        #actions:focus-within CommandRow.--highlight {{
+        #actions > CommandRow.-hovered,
+        #actions > CommandRow.-highlight,
+        #actions > CommandRow.--highlight,
+        #actions:focus > CommandRow.-highlight,
+        #actions:focus > CommandRow.--highlight {{
             color: {DEFAULT_TUI_PALETTE["rowText"]};
-            background: transparent;
+            background: {DEFAULT_TUI_PALETTE["panel"]};
             text-style: none;
         }}
 
-        #actions CommandRow.-highlight .command-label,
-        #actions CommandRow.--highlight .command-label,
-        #actions:focus CommandRow.-highlight .command-label,
-        #actions:focus CommandRow.--highlight .command-label {{
-            background: transparent;
+        #actions > CommandRow.-hovered .command-label,
+        #actions > CommandRow.-highlight .command-label,
+        #actions > CommandRow.--highlight .command-label,
+        #actions:focus > CommandRow.-highlight .command-label,
+        #actions:focus > CommandRow.--highlight .command-label {{
+            background: {DEFAULT_TUI_PALETTE["panel"]};
         }}
 
-        #actions CommandRow:hover,
-        #actions CommandRow:hover.-highlight,
-        #actions CommandRow:hover.--highlight {{
+        #actions > CommandRow.menu-hover {{
             color: {DEFAULT_TUI_PALETTE["highlightText"]};
             background: {DEFAULT_TUI_PALETTE["rowHover"]};
             text-style: bold;
         }}
 
-        #actions CommandRow:hover .command-label,
-        #actions CommandRow:hover.-highlight .command-label,
-        #actions CommandRow:hover.--highlight .command-label {{
+        #actions > CommandRow.menu-hover .command-label {{
+            color: {DEFAULT_TUI_PALETTE["highlightText"]};
             background: {DEFAULT_TUI_PALETTE["rowHover"]};
+            text-style: bold;
         }}
 
         .command-label {{
             width: {MENU_ROW_WIDTH};
             height: 1;
-            background: transparent;
+            background: {DEFAULT_TUI_PALETTE["panel"]};
         }}
 
         #page-title {{
@@ -497,31 +585,49 @@ if TEXTUAL_AVAILABLE:
             overflow: hidden hidden;
         }}
 
-        #palette-panel {{
+        #rgb-panel {{
             height: 1fr;
-            background: transparent;
+            background: {DEFAULT_TUI_PALETTE["panel"]};
             overflow: hidden hidden;
         }}
 
-        #palette-target-label,
-        #palette-color-label,
-        #palette-config {{
+        #rgb-target-label,
+        #rgb-help {{
             height: 1;
             color: {DEFAULT_TUI_PALETTE["mutedText"]};
         }}
 
-        #palette-targets {{
+        #rgb-targets {{
             width: {MENU_ROW_WIDTH};
             height: 2;
-            background: transparent;
+            background: {DEFAULT_TUI_PALETTE["panel"]};
             scrollbar-size: 0 0;
+            overflow: hidden hidden;
         }}
 
-        #palette-colors {{
+        RgbTargetRow {{
             width: {MENU_ROW_WIDTH};
-            height: 5;
-            background: transparent;
-            scrollbar-size: 0 0;
+            height: 1;
+            color: {DEFAULT_TUI_PALETTE["rowText"]};
+            background: {DEFAULT_TUI_PALETTE["panel"]};
+            padding: 0 0;
+        }}
+
+        #rgb-targets > RgbTargetRow.-hovered,
+        #rgb-targets > RgbTargetRow.-highlight,
+        #rgb-targets > RgbTargetRow.--highlight,
+        #rgb-targets:focus > RgbTargetRow.-highlight,
+        #rgb-targets:focus > RgbTargetRow.--highlight {{
+            color: {DEFAULT_TUI_PALETTE["rowText"]};
+            background: {DEFAULT_TUI_PALETTE["panel"]};
+            text-style: none;
+        }}
+
+        #rgb-targets > RgbTargetRow.target-active,
+        #rgb-targets > RgbTargetRow.target-active .command-label {{
+            color: {DEFAULT_TUI_PALETTE["highlightText"]};
+            background: {DEFAULT_TUI_PALETTE["rowHover"]};
+            text-style: bold;
         }}
 
         #hint {{
@@ -538,12 +644,14 @@ if TEXTUAL_AVAILABLE:
             ("ctrl+b", "run_action('build')", "Build"),
             ("ctrl+c", "run_action('clean')", "Clean"),
             ("ctrl+q", "run_action('domain')", "Domain"),
+            ("ctrl+g", "run_action('rgb')", "RGB"),
             ("ctrl+s", "run_action('stop')", "Stop"),
             ("ctrl+e", "run_action('exit')", "Exit"),
             ("r", "run_action('review')", "Review"),
             ("b", "run_action('build')", "Build"),
             ("c", "run_action('clean')", "Clean"),
             ("q", "run_action('domain')", "Domain"),
+            ("g", "run_action('rgb')", "RGB"),
             ("s", "run_action('stop')", "Stop"),
             ("e", "run_action('exit')", "Exit"),
             ("escape", "back", "Back"),
@@ -567,7 +675,7 @@ if TEXTUAL_AVAILABLE:
             self._last_render_state: tuple[Any, ...] | None = None
             self._setup_state = "checking"
             self._active_subprocess: Any = None
-            self._selected_palette_target = "background"
+            self._selected_rgb_target = "background"
             self._stop_requested = False
             self._inline_message = ""
             self._output_lines: list[str] = []
@@ -580,33 +688,29 @@ if TEXTUAL_AVAILABLE:
             with Container(id="screen-root"):
                 with Vertical(id="shell-stack"):
                     with Vertical(id="shell"):
-                        yield Static("", id="title")
-                        yield Static("", id="spacer")
-                        with Container(id="menu-wrap"):
-                            yield ListView(
-                                *[CommandRow(action, palette=self.palette) for action in TUI_ACTIONS],
-                                id="actions",
-                            )
-                        yield Static("", id="page-title", classes="hidden")
-                        yield Static("", id="page-status", classes="hidden")
-                        with Container(id="output-panel", classes="hidden"):
-                            yield Static("", id="output-text")
-                        with Vertical(id="palette-panel", classes="hidden"):
-                            yield Static("", id="palette-target-label")
-                            yield ListView(
-                                PaletteTargetRow("background", "Background"),
-                                PaletteTargetRow("panel", "Center console"),
-                                id="palette-targets",
-                            )
-                            yield Static("", id="palette-color-label")
-                            yield ListView(
-                                *[PaletteColorRow(color) for color in PALETTE_COLOR_CHOICES],
-                                id="palette-colors",
-                            )
-                            yield Static("", id="palette-config")
-                        yield Static("", id="shell-bottom-fill")
-                        yield Static("", id="hint")
-                        yield Static("", id="stake-site")
+                        with Vertical(id="shell-inner"):
+                            yield Static("", id="title")
+                            yield Static("", id="spacer")
+                            with Container(id="menu-wrap"):
+                                yield ListView(
+                                    *[CommandRow(action, palette=self.palette) for action in TUI_ACTIONS],
+                                    id="actions",
+                                )
+                            yield Static("", id="page-title", classes="hidden")
+                            yield Static("", id="page-status", classes="hidden")
+                            with Container(id="output-panel", classes="hidden"):
+                                yield Static("", id="output-text")
+                            with Vertical(id="rgb-panel", classes="hidden"):
+                                yield Static("", id="rgb-target-label")
+                                yield ListView(
+                                    RgbTargetRow("background"),
+                                    RgbTargetRow("panel"),
+                                    id="rgb-targets",
+                                )
+                                yield Static("", id="rgb-help")
+                            yield Static("", id="shell-bottom-fill")
+                            yield Static("", id="hint")
+                            yield Static("", id="stake-site")
                     yield Static("[stable]", id="footer-stable")
 
         def on_mount(self) -> None:
@@ -614,15 +718,8 @@ if TEXTUAL_AVAILABLE:
             self.ui_thread = threading.current_thread()
             self._setup_state = self._read_setup_state()
             self._apply_palette()
-            self._clear_menu_cursor()
             self._refresh_layout(force=True)
             self.set_interval(0.45, self._tick)
-
-        def _clear_menu_cursor(self) -> None:
-            try:
-                self.query_one("#actions", ListView).index = None
-            except Exception:
-                pass
 
         def _apply_palette(self) -> None:
             root = self.query_one("#screen-root", Container)
@@ -630,31 +727,30 @@ if TEXTUAL_AVAILABLE:
             footer_stable = self.query_one("#footer-stable", Static)
             shell_stack = self.query_one("#shell-stack", Vertical)
             shell = self.query_one("#shell", Vertical)
+            shell_inner = self.query_one("#shell-inner", Vertical)
             bottom_fill = self.query_one("#shell-bottom-fill", Static)
             menu_wrap = self.query_one("#menu-wrap", Container)
             actions = self.query_one("#actions", ListView)
             output_panel = self.query_one("#output-panel", Container)
             output_text = self.query_one("#output-text", Static)
-            palette_panel = self.query_one("#palette-panel", Vertical)
-            palette_targets = self.query_one("#palette-targets", ListView)
-            palette_colors = self.query_one("#palette-colors", ListView)
+            rgb_panel = self.query_one("#rgb-panel", Vertical)
+            rgb_targets = self.query_one("#rgb-targets", ListView)
 
-            fill = self.palette["background"]
-            root.styles.background = fill
-            workspace_top.styles.background = fill
-            footer_stable.styles.background = fill
-            shell_stack.styles.background = fill
-            shell.styles.background = fill
+            root.styles.background = self.palette["background"]
+            workspace_top.styles.background = self.palette["background"]
+            footer_stable.styles.background = self.palette["background"]
+            shell_stack.styles.background = self.palette["background"]
+            shell.styles.background = self.palette["background"]
             shell.styles.border = ("round", self.palette["shellBorder"])
-            bottom_fill.styles.background = fill
-            menu_wrap.styles.background = fill
-            actions.styles.background = fill
+            shell_inner.styles.background = self.palette["panel"]
+            bottom_fill.styles.background = self.palette["panel"]
+            menu_wrap.styles.background = self.palette["panel"]
+            actions.styles.background = self.palette["panel"]
             output_panel.styles.background = self.palette["outputPanel"]
             output_panel.styles.border = ("round", self.palette["panelBorder"])
             output_text.styles.background = self.palette["outputPanel"]
-            palette_panel.styles.background = fill
-            palette_targets.styles.background = fill
-            palette_colors.styles.background = fill
+            rgb_panel.styles.background = self.palette["panel"]
+            rgb_targets.styles.background = self.palette["panel"]
 
             for selector, color in (
                 ("#workspace-top", "mutedText"),
@@ -664,19 +760,26 @@ if TEXTUAL_AVAILABLE:
                 ("#page-title", "highlightText"),
                 ("#page-status", "activeText"),
                 ("#output-text", "mutedText"),
-                ("#palette-target-label", "mutedText"),
-                ("#palette-color-label", "mutedText"),
-                ("#palette-config", "mutedText"),
+                ("#rgb-target-label", "mutedText"),
+                ("#rgb-help", "mutedText"),
                 ("#hint", "mutedText"),
             ):
                 self.query_one(selector, Static).styles.color = self.palette[color]
+            for selector in (
+                "#title",
+                "#spacer",
+                "#stake-site",
+                "#page-title",
+                "#page-status",
+                "#hint",
+                "#rgb-target-label",
+                "#rgb-help",
+            ):
+                self.query_one(selector, Static).styles.background = self.palette["panel"]
             for row in self.query(CommandRow):
-                row.styles.background = "transparent"
-                row.styles.color = self.palette["rowText"]
-                label = row.query_one(Label)
-                # Transparent so the row's hover highlight shows through the label.
-                label.styles.background = "transparent"
-                label.update(rich_tui_action_row(row.tui_action, palette=self.palette))
+                row.paint_hover(row.has_class("menu-hover"))
+            for row in self.query(RgbTargetRow):
+                row.paint_selected(row.target_id == self._selected_rgb_target)
 
         def _tick(self) -> None:
             self.cli.drain_output()
@@ -707,7 +810,7 @@ if TEXTUAL_AVAILABLE:
         def _refresh_layout(self, *, force: bool = False) -> None:
             profile = stake_site_profile(self.cli.stake_site, root_dir=self.root_dir)
             on_page = self._active_action is not None
-            on_palette = self._active_action is not None and self._active_action.action_id == "palette"
+            on_rgb = self._active_action is not None and self._active_action.action_id == "rgb"
             page_status: str | Text = ""
             if on_page and self._active_action is not None:
                 page_status = rich_page_status(
@@ -727,7 +830,7 @@ if TEXTUAL_AVAILABLE:
                 self._busy,
                 page_status,
                 hint_text,
-                self._selected_palette_target,
+                self._selected_rgb_target,
                 self._inline_message,
                 self._page_result,
                 self._output_scroll,
@@ -746,15 +849,15 @@ if TEXTUAL_AVAILABLE:
 
             self.query_one("#menu-wrap", Container).set_class(on_page, "hidden")
             self.query_one("#page-title", Static).set_class(not on_page, "hidden")
-            self.query_one("#page-status", Static).set_class((not on_page) or on_palette, "hidden")
-            self.query_one("#output-panel", Container).set_class((not on_page) or on_palette, "hidden")
-            self.query_one("#palette-panel", Vertical).set_class(not on_palette, "hidden")
+            self.query_one("#page-status", Static).set_class((not on_page) or on_rgb, "hidden")
+            self.query_one("#output-panel", Container).set_class((not on_page) or on_rgb, "hidden")
+            self.query_one("#rgb-panel", Vertical).set_class(not on_rgb, "hidden")
 
             if on_page and self._active_action is not None:
                 self.query_one("#page-title", Static).update(self._active_action.label)
                 self.query_one("#page-status", Static).update(page_status)
-            if on_palette:
-                self._refresh_palette_page()
+            if on_rgb:
+                self._refresh_rgb_page()
             elif on_page:
                 self._refresh_output_panel()
 
@@ -769,15 +872,11 @@ if TEXTUAL_AVAILABLE:
                 return self._inline_message
             return "Click a row, press Enter, or use ctrl shortcuts."
 
-        def _refresh_palette_page(self) -> None:
-            target_label = "Background" if self._selected_palette_target == "background" else "Center console"
-            self.query_one("#palette-target-label", Static).update(f"Target: {target_label}")
-            self.query_one("#palette-color-label", Static).update("Colors:")
-            self.query_one("#palette-config", Static).update(
-                "Current config: "
-                f"Background {self.palette['background']} | "
-                f"Center console {self.palette['panel']}"
-            )
+        def _refresh_rgb_page(self) -> None:
+            self.query_one("#rgb-target-label", Static).update("RGB Target")
+            self.query_one("#rgb-help", Static).update("Select a target to open the Windows color picker.")
+            for row in self.query(RgbTargetRow):
+                row.paint_selected(False)
 
         def _append_output(self, text: str) -> None:
             if self.ui_thread is threading.current_thread():
@@ -807,23 +906,46 @@ if TEXTUAL_AVAILABLE:
                 return clean
             return clean[: max(0, OUTPUT_TEXT_WIDTH - 1)] + "…"
 
+        def _selected_rgb_color(self) -> str:
+            return self.palette["background"] if self._selected_rgb_target == "background" else self.palette["panel"]
+
+        def _apply_rgb_target_color(self, target_id: str, color: str) -> None:
+            if target_id == "background":
+                self.palette["background"] = color
+            else:
+                self.palette["panel"] = color
+                self.palette["outputPanel"] = color
+            save_tui_palette(self.palette, root_dir=self.root_dir)
+            self._apply_palette()
+            self._refresh_layout(force=True)
+
+        def _open_native_rgb_picker(self, target_id: str) -> None:
+            self._selected_rgb_target = target_id
+            target_label = rgb_target_label(target_id)
+            next_color = choose_native_rgb_color(self._selected_rgb_color(), title=f"OCLAY {target_label}")
+            if next_color is None:
+                self._inline_message = f"{target_label} color unchanged."
+                self._refresh_layout(force=True)
+                return
+            self._inline_message = f"{target_label} set to {next_color}."
+            self._apply_rgb_target_color(target_id, next_color)
+
         def _open_page(self, action: TuiAction) -> None:
             self._active_action = action
             self._page_result = ""
             self._output_lines = []
             self._output_scroll = 0
-            if action.action_id != "palette":
-                self.query_one("#output-panel", Container).focus()
+            if action.action_id == "rgb":
+                self.query_one("#rgb-targets", ListView).focus()
             else:
-                self.query_one("#palette-colors", ListView).focus()
+                self.query_one("#output-panel", Container).focus()
             self._refresh_layout(force=True)
 
-        def _clicked_tui_action(self, widget: Any) -> TuiAction | None:
+        def _command_row_from_widget(self, widget: Any) -> CommandRow | None:
             current = widget
             while current is not None:
-                action = getattr(current, "tui_action", None)
-                if isinstance(action, TuiAction):
-                    return action
+                if isinstance(current, CommandRow):
+                    return current
                 current = getattr(current, "parent", None)
             return None
 
@@ -836,37 +958,19 @@ if TEXTUAL_AVAILABLE:
             self.action_run_action(action.action_id)
 
         def on_list_view_selected(self, event: ListView.Selected) -> None:
-            if isinstance(event.item, PaletteTargetRow):
-                self._selected_palette_target = event.item.target_id
-                self._refresh_layout(force=True)
-                return
-            if isinstance(event.item, PaletteColorRow):
-                self._apply_palette_color(event.item.color)
+            if isinstance(event.item, RgbTargetRow):
+                self._open_native_rgb_picker(event.item.target_id)
                 return
             action = getattr(event.item, "tui_action", None)
             if isinstance(action, TuiAction):
-                self._clear_menu_cursor()
                 self._run_pointer_action(action)
-
-        def on_key(self, event: events.Key) -> None:
-            if event.key == "escape" and self._active_action is not None:
-                event.stop()
-                self.action_back()
 
         def on_click(self, event: events.Click) -> None:
-            widget = getattr(event, "widget", None)
-            action = self._clicked_tui_action(widget)
-            if action is not None:
-                event.stop()
-                self._run_pointer_action(action)
-
-        def _apply_palette_color(self, color: str) -> None:
-            self.palette[self._selected_palette_target] = color
-            if self._selected_palette_target == "panel":
-                self.palette["outputPanel"] = color
-            save_tui_palette(self.palette, root_dir=self.root_dir)
-            self._apply_palette()
-            self._refresh_layout(force=True)
+            row = self._command_row_from_widget(getattr(event, "widget", None))
+            if row is None:
+                return
+            event.stop()
+            self._run_pointer_action(row.tui_action)
 
         def action_back(self) -> None:
             if self._active_action is None:
@@ -891,6 +995,9 @@ if TEXTUAL_AVAILABLE:
                 return
             if action.action_id == "domain":
                 self._toggle_domain_inline()
+                return
+            if action.action_id == "rgb":
+                self._open_page(action)
                 return
             if action.action_id in {"review", "build"}:
                 self._start_helper_inline(action)
@@ -969,7 +1076,7 @@ if TEXTUAL_AVAILABLE:
                 if self._stop_requested:
                     self.cli.status = "ready"
                     failed = False
-                if action.action_id != "palette":
+                if action.action_id != "rgb":
                     status_text = str(self.cli.status or "").lower()
                     self._page_result = "failed" if failed or "failed" in status_text or "error" in status_text else "done"
                 self._busy = False
@@ -1089,10 +1196,7 @@ if TEXTUAL_AVAILABLE:
                 return
             if hasattr(event, "stop"):
                 event.stop()
-            if self._active_action.action_id == "palette":
-                widget = self.query_one("#palette-colors", ListView)
-                if hasattr(widget, "scroll_relative"):
-                    widget.scroll_relative(y=y, animate=False)
+            if self._active_action.action_id == "rgb":
                 return
             max_scroll = max(0, len(self._output_lines) - OUTPUT_VISIBLE_HEIGHT)
             self._output_scroll = max(0, min(self._output_scroll + y, max_scroll))

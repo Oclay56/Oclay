@@ -3,14 +3,18 @@ from app.local_helper_tui import (
     BACKGROUND_FILL,
     DEFAULT_TUI_PALETTE,
     MENU_FOOTER_CUSHION_HEIGHT,
+    ROW_HOVER_FILL,
     build_tui_actions,
+    clean_tui_palette,
     format_tui_action_row,
+    hex_to_rgb,
     rich_title_row,
+    rgb_to_hex,
     textual_dependency_status,
 )
 
 
-def test_oclay_tui_exposes_only_simple_actions():
+def test_oclay_tui_exposes_rgb_action_not_palette():
     actions = build_tui_actions()
 
     assert [action.action_id for action in actions] == [
@@ -18,16 +22,15 @@ def test_oclay_tui_exposes_only_simple_actions():
         "build",
         "clean",
         "domain",
+        "rgb",
         "stop",
         "exit",
     ]
+    assert [action.label for action in actions if action.action_id == "rgb"] == ["RGB"]
+    assert [action.shortcut for action in actions if action.action_id == "rgb"] == ["ctrl+g"]
+    assert all(action.label != "Palette" for action in actions)
     assert all("Historic" not in action.label for action in actions)
     assert all("M/L" not in action.label for action in actions)
-
-
-def test_oclay_tui_has_no_upload_or_wallpaper_action():
-    action_ids = {action.action_id for action in build_tui_actions()}
-    assert "upload" not in action_ids
 
 
 def test_oclay_tui_keeps_two_bracket_row_format():
@@ -56,12 +59,39 @@ def test_textual_dependency_probe_shape():
     assert set(status) == {"available", "error"}
 
 
-def test_background_is_solid_navy_fill():
-    # The TUI background is a single solid color (no animation, no wallpaper).
-    assert BACKGROUND_FILL.startswith("#")
-    assert len(BACKGROUND_FILL) == 7
-    # Background and the console interior share the fill so no black bleeds
-    # through the rounded border.
-    assert DEFAULT_TUI_PALETTE["background"] == BACKGROUND_FILL
-    assert DEFAULT_TUI_PALETTE["panel"] == BACKGROUND_FILL
-    assert DEFAULT_TUI_PALETTE["outputPanel"] == BACKGROUND_FILL
+def test_background_is_restored_black_fill():
+    assert BACKGROUND_FILL == "#111111"
+    assert DEFAULT_TUI_PALETTE["background"] == "#111111"
+    assert DEFAULT_TUI_PALETTE["panel"] == "#101010"
+    assert DEFAULT_TUI_PALETTE["outputPanel"] == "#101010"
+    assert DEFAULT_TUI_PALETTE["panelBorder"] == "#5A5A5A"
+    assert DEFAULT_TUI_PALETTE["shellBorder"] == "#6A6A6A"
+    assert ROW_HOVER_FILL == "#3A3A3A"
+
+
+def test_rgb_theme_controls_background_and_center_console_only():
+    palette = clean_tui_palette(
+        {
+            "background": "#202A44",
+            "panel": "#252525",
+            "outputPanel": "#FFFFFF",
+            "panelBorder": "#1010FF",
+            "shellBorder": "#1010FF",
+            "rowHover": "#354A76",
+            "highlightText": "#F4F6F8",
+        }
+    )
+
+    assert palette["background"] == "#202A44"
+    assert palette["panel"] == "#252525"
+    assert palette["outputPanel"] == "#252525"
+    assert palette["panelBorder"] == "#5A5A5A"
+    assert palette["shellBorder"] == "#6A6A6A"
+    assert palette["rowHover"] == "#3A3A3A"
+    assert palette["highlightText"] == "#B8B19C"
+
+
+def test_rgb_hex_helpers_clamp_and_parse():
+    assert rgb_to_hex(32, 42, 68) == "#202A44"
+    assert rgb_to_hex(-1, 300, 68) == "#00FF44"
+    assert hex_to_rgb("#202A44") == (32, 42, 68)
