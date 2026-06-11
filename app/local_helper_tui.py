@@ -21,6 +21,11 @@ from .local_helper_cli import (
     stake_site_profile,
 )
 
+BACKGROUND_GIF_RELATIVE_PATH = Path("app") / "assets" / "oclay-background.gif"
+BACKGROUND_FRAME_LIMIT = 240
+BACKGROUND_FRAME_INTERVAL_SECONDS = 0.03
+BACKGROUND_FRAME_STYLE = "#F4F6F8 on #000000"
+
 try:
     from textual import events
     from textual.app import App, ComposeResult
@@ -143,6 +148,100 @@ def save_tui_palette(
 
 def textual_dependency_status() -> dict[str, Any]:
     return {"available": TEXTUAL_AVAILABLE, "error": TEXTUAL_IMPORT_ERROR}
+
+
+def animated_background_path(*, root_dir: Path = ROOT_DIR) -> Path:
+    return root_dir / BACKGROUND_GIF_RELATIVE_PATH
+
+
+class TerminalGifBackground:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._frames_by_size: dict[tuple[int, int], list[Text]] = {}
+
+    def render(self, width: int, height: int, frame_index: int) -> Text:
+        clean_width = max(1, int(width or 1))
+        clean_height = max(1, int(height or 1))
+        frames = self._frames_for_size(clean_width, clean_height)
+        return frames[frame_index % len(frames)]
+
+    def _frames_for_size(self, width: int, height: int) -> list[Text]:
+        key = (width, height)
+        cached = self._frames_by_size.get(key)
+        if cached:
+            return cached
+
+        frame_text = self._load_gif_frames(width, height)
+        if not frame_text:
+            frame_text = _fallback_star_frames(width, height)
+        frames = [Text(frame, style=BACKGROUND_FRAME_STYLE) for frame in frame_text]
+        self._frames_by_size[key] = frames
+        return frames
+
+    def _load_gif_frames(self, width: int, height: int) -> list[str]:
+        if not self.path.exists():
+            return []
+        try:
+            from PIL import Image, ImageSequence
+        except Exception:
+            return []
+
+        try:
+            with Image.open(self.path) as image:
+                raw_frames = [frame.copy().convert("L") for frame in ImageSequence.Iterator(image)]
+        except Exception:
+            return []
+
+        if not raw_frames:
+            return []
+
+        step = max(1, len(raw_frames) // BACKGROUND_FRAME_LIMIT)
+        sampled = raw_frames[::step][:BACKGROUND_FRAME_LIMIT]
+        return [
+            _image_to_terminal_stars(frame, width=width, height=height)
+            for frame in sampled
+        ]
+
+
+def _image_to_terminal_stars(image: Any, *, width: int, height: int) -> str:
+    rows: list[str] = []
+    source_width, source_height = image.size
+    pixels = image.load()
+    for y in range(height):
+        source_y0 = int(y * source_height / height)
+        source_y1 = max(source_y0 + 1, int((y + 1) * source_height / height))
+        chars: list[str] = []
+        for x in range(width):
+            source_x0 = int(x * source_width / width)
+            source_x1 = max(source_x0 + 1, int((x + 1) * source_width / width))
+            value = 0
+            for source_y in range(source_y0, min(source_y1, source_height)):
+                for source_x in range(source_x0, min(source_x1, source_width)):
+                    value = max(value, int(pixels[source_x, source_y]))
+            if value >= 235:
+                chars.append("*")
+            elif value >= 160:
+                chars.append("+")
+            elif value >= 60:
+                chars.append(".")
+            else:
+                chars.append(" ")
+        rows.append("".join(chars))
+    return "\n".join(rows)
+
+
+def _fallback_star_frames(width: int, height: int) -> list[str]:
+    frames: list[str] = []
+    for frame_index in range(24):
+        rows: list[str] = []
+        for y in range(height):
+            chars: list[str] = []
+            for x in range(width):
+                seed = (x * 37 + y * 67 + frame_index * 11) % 211
+                chars.append("." if seed in {0, 7} else "*" if seed == 13 else " ")
+            rows.append("".join(chars))
+        frames.append("\n".join(rows))
+    return frames
 
 
 def console_input_mode_without_text_selection(mode: int) -> int:
@@ -318,10 +417,23 @@ if TEXTUAL_AVAILABLE:
         return TuiAction("palette-row", label, "enter", "", "palette-row", "Palette")
 
 
+    class AnimatedBackgroundContainer(Container):
+        def render(self) -> Text:
+            app = getattr(self, "app", None)
+            background = getattr(app, "background", None)
+            if background is None:
+                return Text("", style="#F4F6F8 on #000000")
+            return background.render(
+                max(1, self.size.width),
+                max(1, self.size.height),
+                int(getattr(app, "_background_frame", 0)),
+            )
+
+
     class OclayTui(App[None]):
         CSS = f"""
         Screen {{
-            background: {DEFAULT_TUI_PALETTE["background"]};
+            background: #000000;
             color: {DEFAULT_TUI_PALETTE["mutedText"]};
             overflow: hidden hidden;
         }}
@@ -331,7 +443,7 @@ if TEXTUAL_AVAILABLE:
             height: 3;
             width: 100%;
             padding: 1 1 0 1;
-            background: {DEFAULT_TUI_PALETTE["background"]};
+            background: transparent;
             color: {DEFAULT_TUI_PALETTE["mutedText"]};
         }}
 
@@ -339,13 +451,13 @@ if TEXTUAL_AVAILABLE:
             align: center middle;
             height: 1fr;
             width: 100%;
-            background: {DEFAULT_TUI_PALETTE["background"]};
+            background: #000000;
         }}
 
         #shell-stack {{
             width: 116;
             height: 24;
-            background: {DEFAULT_TUI_PALETTE["background"]};
+            background: transparent;
         }}
 
         #shell {{
@@ -353,7 +465,7 @@ if TEXTUAL_AVAILABLE:
             height: 22;
             max-height: 22;
             min-height: 22;
-            background: {DEFAULT_TUI_PALETTE["panel"]};
+            background: transparent;
             border: round {DEFAULT_TUI_PALETTE["shellBorder"]};
             padding: 1 4;
             overflow: hidden hidden;
@@ -364,7 +476,7 @@ if TEXTUAL_AVAILABLE:
             width: 116;
             padding: 0 0;
             content-align: right top;
-            background: {DEFAULT_TUI_PALETTE["background"]};
+            background: transparent;
             color: {DEFAULT_TUI_PALETTE["mutedText"]};
         }}
 
@@ -388,21 +500,21 @@ if TEXTUAL_AVAILABLE:
 
         #shell-bottom-fill {{
             height: {MENU_FOOTER_CUSHION_HEIGHT};
-            background: {DEFAULT_TUI_PALETTE["panel"]};
+            background: transparent;
         }}
 
         #menu-wrap {{
             width: 100%;
             height: {MENU_ROW_COUNT};
             align: center top;
-            background: {DEFAULT_TUI_PALETTE["panel"]};
+            background: transparent;
             overflow: hidden hidden;
         }}
 
         #actions {{
             width: {MENU_ROW_WIDTH};
             height: {MENU_ROW_COUNT};
-            background: {DEFAULT_TUI_PALETTE["panel"]};
+            background: transparent;
             scrollbar-size: 0 0;
             overflow: hidden hidden;
         }}
@@ -411,7 +523,7 @@ if TEXTUAL_AVAILABLE:
             width: {MENU_ROW_WIDTH};
             height: 1;
             color: {DEFAULT_TUI_PALETTE["rowText"]};
-            background: {DEFAULT_TUI_PALETTE["panel"]};
+            background: transparent;
             padding: 0 0;
         }}
 
@@ -456,7 +568,7 @@ if TEXTUAL_AVAILABLE:
 
         #palette-panel {{
             height: 1fr;
-            background: {DEFAULT_TUI_PALETTE["panel"]};
+            background: transparent;
             overflow: hidden hidden;
         }}
 
@@ -470,14 +582,14 @@ if TEXTUAL_AVAILABLE:
         #palette-targets {{
             width: {MENU_ROW_WIDTH};
             height: 2;
-            background: {DEFAULT_TUI_PALETTE["panel"]};
+            background: transparent;
             scrollbar-size: 0 0;
         }}
 
         #palette-colors {{
             width: {MENU_ROW_WIDTH};
             height: 5;
-            background: {DEFAULT_TUI_PALETTE["panel"]};
+            background: transparent;
             scrollbar-size: 0 0;
         }}
 
@@ -511,6 +623,8 @@ if TEXTUAL_AVAILABLE:
             self.root_dir = root_dir
             self.display_workspace = Path.home()
             self.palette = load_tui_palette(root_dir=root_dir)
+            self.background = TerminalGifBackground(animated_background_path(root_dir=root_dir))
+            self._background_frame = 0
             self.ui_thread: threading.Thread | None = None
             self.cli = OclayCli(
                 root_dir=root_dir,
@@ -533,7 +647,7 @@ if TEXTUAL_AVAILABLE:
 
         def compose(self) -> ComposeResult:
             yield Static("", id="workspace-top")
-            with Container(id="screen-root"):
+            with AnimatedBackgroundContainer(id="screen-root"):
                 with Vertical(id="shell-stack"):
                     with Vertical(id="shell"):
                         yield Static("", id="title")
@@ -570,7 +684,9 @@ if TEXTUAL_AVAILABLE:
             self.ui_thread = threading.current_thread()
             self._setup_state = self._read_setup_state()
             self._apply_palette()
+            self._refresh_animated_background()
             self._refresh_layout(force=True)
+            self.set_interval(BACKGROUND_FRAME_INTERVAL_SECONDS, self._advance_background)
             self.set_interval(0.45, self._tick)
 
         def _apply_palette(self) -> None:
@@ -588,21 +704,21 @@ if TEXTUAL_AVAILABLE:
             palette_targets = self.query_one("#palette-targets", ListView)
             palette_colors = self.query_one("#palette-colors", ListView)
 
-            root.styles.background = self.palette["background"]
-            workspace_top.styles.background = self.palette["background"]
-            footer_stable.styles.background = self.palette["background"]
-            shell_stack.styles.background = self.palette["background"]
-            shell.styles.background = self.palette["panel"]
+            root.styles.background = "#000000"
+            workspace_top.styles.background = "transparent"
+            footer_stable.styles.background = "transparent"
+            shell_stack.styles.background = "transparent"
+            shell.styles.background = "transparent"
             shell.styles.border = ("round", self.palette["shellBorder"])
-            bottom_fill.styles.background = self.palette["panel"]
-            menu_wrap.styles.background = self.palette["panel"]
-            actions.styles.background = self.palette["panel"]
+            bottom_fill.styles.background = "transparent"
+            menu_wrap.styles.background = "transparent"
+            actions.styles.background = "transparent"
             output_panel.styles.background = self.palette["outputPanel"]
             output_panel.styles.border = ("round", self.palette["panelBorder"])
             output_text.styles.background = self.palette["outputPanel"]
-            palette_panel.styles.background = self.palette["panel"]
-            palette_targets.styles.background = self.palette["panel"]
-            palette_colors.styles.background = self.palette["panel"]
+            palette_panel.styles.background = "transparent"
+            palette_targets.styles.background = "transparent"
+            palette_colors.styles.background = "transparent"
 
             for selector, color in (
                 ("#workspace-top", "mutedText"),
@@ -620,6 +736,17 @@ if TEXTUAL_AVAILABLE:
                 self.query_one(selector, Static).styles.color = self.palette[color]
             for row in self.query(CommandRow):
                 row.query_one(Label).update(rich_tui_action_row(row.tui_action, palette=self.palette))
+
+        def _advance_background(self) -> None:
+            self._background_frame += 1
+            self._refresh_animated_background()
+
+        def _refresh_animated_background(self) -> None:
+            try:
+                background = self.query_one("#screen-root", AnimatedBackgroundContainer)
+            except Exception:
+                return
+            background.refresh()
 
         def _tick(self) -> None:
             disable_terminal_text_selection()

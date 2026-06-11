@@ -1,6 +1,12 @@
+from pathlib import Path
+
 from app.local_helper_cli import APP_DISPLAY_NAME
 from app.local_helper_tui import (
+    BACKGROUND_FRAME_INTERVAL_SECONDS,
+    BACKGROUND_FRAME_LIMIT,
     MENU_FOOTER_CUSHION_HEIGHT,
+    TerminalGifBackground,
+    animated_background_path,
     build_tui_actions,
     format_tui_action_row,
     rich_title_row,
@@ -47,3 +53,22 @@ def test_textual_dependency_probe_shape():
     status = textual_dependency_status()
 
     assert set(status) == {"available", "error"}
+
+
+def test_animated_background_asset_renders_terminal_frame():
+    root_dir = Path(__file__).resolve().parents[1]
+    path = animated_background_path(root_dir=root_dir)
+
+    assert path.exists()
+
+    frame = TerminalGifBackground(path).render(32, 8, 0).plain
+    lines = frame.splitlines()
+
+    assert len(lines) == 8
+    assert all(len(line) == 32 for line in lines)
+    assert any(char in frame for char in ".*+")
+
+
+def test_animated_background_keeps_source_gif_pace():
+    assert BACKGROUND_FRAME_LIMIT >= 195
+    assert BACKGROUND_FRAME_INTERVAL_SECONDS <= 0.03
