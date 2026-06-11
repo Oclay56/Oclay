@@ -80,6 +80,7 @@ def _compact_candidate_pool_row(row: dict[str, Any]) -> dict[str, Any]:
         "line": row.get("line"),
         "odds": row.get("odds"),
         "contextQuality": row.get("contextQuality"),
+        "researched": row.get("researched"),
         "score": row.get("score"),
         "marketContestRank": row.get("marketContestRank"),
         "gameContestRank": row.get("gameContestRank"),
@@ -304,18 +305,22 @@ async def build_sgm_candidate_pool_from_boards(
         )
         candidate.update(score)
         _apply_market_policy(candidate, market_policies, killed_markets)
-        if candidate.get("marketPolicyStatus") == "exclude":
-            candidate["rejectionReason"] = "market_killed_negative_realized_edge"
-            rejected["market_killed_negative_realized_edge"] += 1
-        elif candidate["score"] < clean_quality_floor:
-            candidate["rejectionReason"] = "score_below_quality_floor"
-            rejected["score_below_quality_floor"] += 1
-        elif not candidate.get("rowId"):
+        if not candidate.get("rowId"):
             candidate["rejectionReason"] = "missing_row_id"
             rejected["missing_row_id"] += 1
         elif candidate["identityResolution"] == "unmatched":
             candidate["rejectionReason"] = "mlb_identity_unmatched"
             rejected["mlb_identity_unmatched"] += 1
+        elif not candidate.get("researched"):
+            # Never surface a player whose stats we did not actually load.
+            candidate["rejectionReason"] = "insufficient_researched_data"
+            rejected["insufficient_researched_data"] += 1
+        elif candidate.get("marketPolicyStatus") == "exclude":
+            candidate["rejectionReason"] = "market_killed_negative_realized_edge"
+            rejected["market_killed_negative_realized_edge"] += 1
+        elif candidate["score"] < clean_quality_floor:
+            candidate["rejectionReason"] = "score_below_quality_floor"
+            rejected["score_below_quality_floor"] += 1
         else:
             scored_rows.append(candidate)
 
@@ -413,6 +418,18 @@ async def build_sgm_candidate_pool_from_boards(
             ),
         },
         "rejectedSummary": dict(sorted(rejected.items())),
+        "researchCoverage": {
+            "scannedRows": len(flat_rows),
+            "researchedRows": sum(1 for row in scored_rows if row.get("researched")),
+            "excludedNotResearched": rejected.get("insufficient_researched_data", 0)
+            + rejected.get("mlb_identity_unmatched", 0),
+            "allReturnedRowsResearched": all(row.get("researched") for row in ranked),
+            "note": (
+                "Every returned candidate has loaded MLB stat data; rows whose stats "
+                "could not be pulled are excluded as insufficient_researched_data, "
+                "never surfaced as picks."
+            ),
+        },
         "marketExposure": dict(Counter(row["normalizedMarketKey"] for row in ranked)),
         "marketConcentration": market_concentration,
         "marketContest": market_contest,
@@ -569,6 +586,31 @@ def _candidate_from_enriched_row(row: dict[str, Any], enriched_prop: dict[str, A
     if identity_status == "unmatched":
         mapping_warnings.append("mlb_player_unmatched")
 
+    # Hard "we actually read this player's stats" determination. A row is only
+    # researched when its identity matched AND real stat data loaded — season
+    # value present or at least one recent game with the stat. contextQuality
+    # is downgraded to reflect actual data presence, not just the market.
+    recent_games_used = max(
+        _int_or_none((windows.get("5") or {}).get("gamesUsed")) or 0,
+        _int_or_none((windows.get("10") or {}).get("gamesUsed")) or 0,
+        _int_or_none((windows.get("15") or {}).get("gamesUsed")) or 0,
+    )
+    season_value_present = season.get("total") is not None or season.get("average") is not None
+    has_loaded_stats = recent_games_used >= 1 or season_value_present
+    researched = identity_status != "unmatched" and has_loaded_stats
+    context_quality = stat_context.get("contextQuality") or "unsupported"
+    if not researched:
+        context_quality = "unsupported"
+        mapping_warnings.append("player_stats_not_loaded")
+    research_summary = {
+        "researched": researched,
+        "identityResolution": identity_status,
+        "statKey": stat_context.get("statKey") or stat_context.get("statFormula"),
+        "seasonValuePresent": bool(season_value_present),
+        "seasonGamesUsed": season.get("gamesUsed"),
+        "recentGamesUsed": recent_games_used,
+    }
+
     return {
         "fixtureSlug": row.get("fixtureSlug"),
         "matchup": row.get("matchup"),
@@ -597,7 +639,9 @@ def _candidate_from_enriched_row(row: dict[str, Any], enriched_prop: dict[str, A
         "mlbStatKey": stat_context.get("statKey") or stat_context.get("statFormula"),
         "statContext": stat_context,
         "identityResolution": identity_status,
-        "contextQuality": stat_context.get("contextQuality") or "unsupported",
+        "contextQuality": context_quality,
+        "researched": researched,
+        "researchSummary": research_summary,
         "mappingWarnings": mapping_warnings,
         "last5": context["last5"],
         "last10": context["last10"],

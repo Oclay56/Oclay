@@ -155,16 +155,19 @@ async def enrich_props_with_mlb_data(
     slate_date = str(props_payload.get("date") or "")
 
     for prop in props_payload.get("props") or []:
-        enriched_prop = await _enrich_prop(
-            prop,
-            engine,
-            season=season,
-            group_mode=group_mode,
-            history_limit=history_limit,
-            search_limit=search_limit,
-            slate_date=slate_date,
-        )
-        if enriched_prop["mlbMatch"]["status"] != "unmatched":
+        try:
+            enriched_prop = await _enrich_prop(
+                prop,
+                engine,
+                season=season,
+                group_mode=group_mode,
+                history_limit=history_limit,
+                search_limit=search_limit,
+                slate_date=slate_date,
+            )
+        except Exception as exc:  # noqa: BLE001 - one player must not fail the slate
+            enriched_prop = _enrichment_failed_prop(prop, exc)
+        if enriched_prop["mlbMatch"]["status"] not in {"unmatched", "enrichment_failed"}:
             matched_count += 1
         enriched_props.append(enriched_prop)
 
@@ -180,6 +183,27 @@ async def enrich_props_with_mlb_data(
         }
     )
     return payload
+
+
+def _enrichment_failed_prop(prop: dict[str, Any], exc: Exception) -> dict[str, Any]:
+    """Mark a prop whose MLB enrichment failed so it is excluded, not surfaced.
+
+    The slate continues; this single row is flagged as not researched.
+    """
+    row = copy.deepcopy(prop)
+    player = row.get("player") or {}
+    player["mlbId"] = None
+    player["matchStatus"] = "enrichment_failed"
+    row["player"] = player
+    row["mlbMatch"] = {"status": "enrichment_failed", "error": str(exc)}
+    row["mlbProfile"] = None
+    row["recentHistory"] = None
+    row["statContext"] = None
+    row["lineupContext"] = None
+    row["opponentPitcherContext"] = None
+    row["opponentTeamContext"] = None
+    row["playerSplits"] = None
+    return row
 
 
 def group_for_market(market_key: str) -> str:

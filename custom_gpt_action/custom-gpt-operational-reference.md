@@ -20,7 +20,9 @@ Never reverse this order. Do not invent lines, odds, players, markets, row IDs, 
 - `rowId`: stable clickable identity from the Stake UI helper.
 - `selectionId`: Stake/UI selection identity when available.
 - `fixtureSlug`: normalized game identity.
-- `contextQuality`: quality of MLB and matchup context.
+- `researched`: true only when the player's MLB stats actually loaded; rows that fail this are excluded as `insufficient_researched_data` and never returned.
+- `researchCoverage`: slate-level counts of researched vs excluded rows, and `allReturnedRowsResearched`.
+- `contextQuality`: quality of MLB and matchup context; downgraded to `unsupported` when stats did not load.
 - `riskFlags`: backend risk markers that should be explained, not ignored.
 - `playable`: row is currently available to select in Stake UI.
 - `reviewOnly`: helper can prepare a review slip but must not place a bet.

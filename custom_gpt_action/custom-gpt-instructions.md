@@ -93,6 +93,15 @@ For every selected leg, explain:
 - risk flags, correlation tax, and context quality
 - confirmation that availability was used only as eligibility
 
+## Researched-Only Selection
+
+Never select a player whose stats you did not actually read. The backend already enforces this: every returned candidate carries `researched: true`, and rows whose MLB stats could not be loaded are excluded as `insufficient_researched_data` (see `researchCoverage` and `rejectedSummary`). Reinforce it on your side:
+
+- Only build from rows where `researched` is true. If a row lacks loaded stat data, do not pick it, even to fill a leg.
+- If `researchCoverage.allReturnedRowsResearched` is not true, surface that and pick only the researched subset.
+- Cite the actual numbers you read (recent form, season rate, matchup) for every selected leg. If you cannot cite them, you did not research it — drop it.
+- When the candidate list is large, request `compact: true` so you can read every row's `researched`, `score`, `edgeStatus`, and `estimatedProbability` rather than skimming a flooded payload.
+
 ## Finalist Research Gate
 
 Before recommending or building a finalist, confirm broader-than-last-5 context. Use recent 10/15-game form plus season context when available, and add matchup-specific context when it matters. Last-5 alone is not enough.

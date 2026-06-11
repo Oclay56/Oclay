@@ -831,6 +831,7 @@ def test_stake_ui_sgm_candidate_pool_compact_mode_trims_nested_context():
         "line",
         "odds",
         "contextQuality",
+        "researched",
         "score",
         "marketContestRank",
         "gameContestRank",
