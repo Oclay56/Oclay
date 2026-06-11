@@ -154,10 +154,11 @@ def test_normalizes_sgm_only_market_aliases():
     assert stat_value_from_stats(mapping, {"hits": 1, "runs": 2, "rbi": 3}) == 6
 
 
-def test_probability_assessment_uses_formula_inputs_and_labels_edge():
+def test_probability_assessment_uses_distributional_engine_and_labels_edge():
     scored = score_sgm_candidate(
         {
             "odds": 1.9,
+            "oppositeOdds": 2.05,
             "side": "under",
             "line": 0.5,
             "contextQuality": "full",
@@ -165,7 +166,7 @@ def test_probability_assessment_uses_formula_inputs_and_labels_edge():
             "context": {
                 "last10": {"sideHitRate": 0.8, "gamesUsed": 10},
                 "last15": {"sideHitRate": 0.8, "gamesUsed": 15},
-                "season": {"sideMargin": 0.5, "gamesUsed": 60},
+                "season": {"sideMargin": 0.5, "average": 0.35, "gamesUsed": 60},
             },
             "normalizedMarketKey": "hits",
             "opponentPitcherContext": {
@@ -186,7 +187,13 @@ def test_probability_assessment_uses_formula_inputs_and_labels_edge():
     probability = scored["probabilityAssessment"]
 
     assert probability["impliedProbability"] == 0.5263
-    assert probability["inputs"]["seasonRateSource"] == "season_average_proxy"
+    # Two-way odds present, so the vig is removed and the edge is measured
+    # against fair probability, not the raw implied price.
+    assert probability["devigMethod"] == "two_way_multiplicative_devig"
+    assert probability["fairProbability"] < probability["impliedProbability"]
+    assert probability["edgeReference"] == "devigged_fair_probability"
+    # The season per-game mean drives a real negative-binomial estimate.
+    assert probability["inputs"]["distribution"] == "negative_binomial"
     assert probability["inputs"]["last15Rate"] == 0.8
     assert probability["inputs"]["matchupFactor"] > 0.5
     assert probability["edgeStatus"] == "clear_possible_edge"

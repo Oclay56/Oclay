@@ -4,10 +4,16 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from typing import Any
 
+from .correlation import leg_correlation_penalty, slip_probability_and_ev
 from .decision_profiles import evidence_check, evidence_windows, season_evidence, trend_labels
 from .mlb_bridge import enrich_props_with_mlb_data, stat_mapping_for_market
 from .market_normalization import normalize_mlb_prop_market_key
 from .mlb_props import slug_key
+from .probability_engine import (
+    devig_two_way,
+    estimate_side_probability,
+    get_active_calibrations,
+)
 from .stake_sgm_browser import (
     SGM_BOARD_FRESH_SECONDS,
     make_sgm_selection_row_id,
@@ -304,6 +310,7 @@ async def build_sgm_candidate_pool_from_boards(
         else:
             scored_rows.append(candidate)
 
+    correlation_adjustments = _apply_correlation_penalties(scored_rows)
     market_contest = _apply_within_player_market_contest(scored_rows)
     game_contest = _apply_game_level_contest(
         scored_rows,
@@ -369,9 +376,11 @@ async def build_sgm_candidate_pool_from_boards(
             "rejectedRows": sum(rejected.values()),
             "marketContestGroups": market_contest["playerGroups"],
             "contestedPlayerGroups": market_contest["contestedPlayerGroups"],
+            "correlationTaxedRows": correlation_adjustments,
         },
         "rankedCandidates": ranked,
         "perGame": per_game,
+        "slipProjections": _slate_slip_projections(ranked),
         "rejectedSummary": dict(sorted(rejected.items())),
         "marketExposure": dict(Counter(row["normalizedMarketKey"] for row in ranked)),
         "marketConcentration": market_concentration,
@@ -431,6 +440,7 @@ def _flatten_board_rows(
                 if max_odds is not None and odds > float(max_odds):
                     rejected["above_max_odds"] += 1
                     continue
+                opposite_side = "under" if row_side == "over" else "over"
                 row = dict(source_row)
                 row.update(
                     {
@@ -438,6 +448,7 @@ def _flatten_board_rows(
                         "normalizedMarketKey": normalized,
                         "side": row_side,
                         "odds": odds,
+                        "oppositeOdds": _float_or_none(source_row.get(opposite_side)),
                         "balanced": source_row.get("balanced"),
                         "push": source_row.get("push"),
                         "betFactor": source_row.get("betFactor"),
@@ -542,6 +553,7 @@ def _candidate_from_enriched_row(row: dict[str, Any], enriched_prop: dict[str, A
         "side": side,
         "line": row.get("line"),
         "odds": row.get("odds"),
+        "oppositeOdds": row.get("oppositeOdds"),
         "balanced": row.get("balanced"),
         "push": row.get("push"),
         "betFactor": row.get("betFactor"),
@@ -613,12 +625,18 @@ def _probability_assessment(
 ) -> dict[str, Any]:
     side = str(candidate.get("side") or "under").lower()
     odds = _float_or_none(candidate.get("odds"))
-    implied = round(1 / odds, 4) if odds and odds > 0 else None
+    opposite_odds = _float_or_none(candidate.get("oppositeOdds"))
+    devig = devig_two_way(odds, opposite_odds)
+    implied = devig["impliedProbability"]
+    fair = devig["fairProbability"]
+
     context = candidate.get("context") or {}
     season = context.get("season") or candidate.get("season") or {}
+    season_mean = _float_or_none(season.get("average"))
     season_rate, season_source = _season_probability_rate(season, candidate.get("line"), side)
     recent_rate, recent_source, recent_games = _recent_probability_rate(context, side)
     matchup = _matchup_factor(candidate, side)
+    matchup_factor = _float_or_none(matchup.get("factor"))
     penalties = _probability_penalties(candidate, scoring_risk_flags, matchup)
     reliability_flags = _probability_reliability_flags(
         candidate,
@@ -636,21 +654,32 @@ def _probability_assessment(
         scoring_risk_flags=scoring_risk_flags,
     )
 
-    estimated = None
+    market_dash = str(candidate.get("normalizedMarketKey") or "").replace("_", "-")
+    market_underscore = market_dash.replace("-", "_")
+    active_calibrations = get_active_calibrations()
+    calibration = active_calibrations.get(market_underscore) or active_calibrations.get(market_dash)
+    estimate = estimate_side_probability(
+        season_mean=season_mean,
+        line=candidate.get("line"),
+        side=side,
+        market_key=market_dash,
+        recent_rate=recent_rate,
+        recent_games=recent_games,
+        matchup_factor=matchup_factor,
+        calibration=calibration,
+    )
+
+    estimated = estimate["estimatedProbability"] if estimate else None
     adjusted = None
     edge = None
-    if season_rate is not None and recent_rate is not None and implied is not None:
-        estimated = round(
-            season_rate * 0.50
-            + recent_rate * 0.30
-            + (_float_or_none(matchup.get("factor")) or 0.50) * 0.20,
-            4,
-        )
+    if estimated is not None:
         adjusted = round(
             max(0.0, min(1.0, estimated - sum(item["amount"] for item in penalties))),
             4,
         )
-        edge = round(adjusted - implied, 4)
+    edge_reference = fair if fair is not None else implied
+    if adjusted is not None and edge_reference is not None:
+        edge = round(adjusted - edge_reference, 4)
 
     edge_status = _edge_status(edge, data_quality)
     reason_tags = []
@@ -658,23 +687,44 @@ def _probability_assessment(
         reason_tags.append(f"probability_{edge_status}")
     elif edge_status == "negative_edge":
         reason_tags.append("probability_negative_edge")
+    if devig["method"] == "two_way_multiplicative_devig":
+        reason_tags.append("edge_measured_vs_devigged_fair_odds")
+    if calibration:
+        reason_tags.append("calibration_correction_applied")
 
+    distributional = (estimate or {}).get("distributional") or {}
+    shrinkage = (estimate or {}).get("shrinkage") or {}
     return {
-        "formula": "estimatedProbability = (seasonRate * 0.50) + (last15Rate * 0.30) + (matchupFactor * 0.20)",
+        "formula": (estimate or {}).get(
+            "formula",
+            "negative-binomial season estimate -> empirical-Bayes blend -> matchup logit shift",
+        ),
         "impliedProbability": implied,
+        "fairProbability": fair,
+        "overround": devig["overround"],
+        "devigMethod": devig["method"],
+        "winProbability": estimated,
         "estimatedProbability": estimated,
         "adjustedEstimatedProbability": adjusted,
         "edge": edge,
         "edgeStatus": edge_status,
+        "edgeReference": "devigged_fair_probability" if fair is not None else "raw_implied_probability",
         "dataQuality": data_quality,
         "inputs": {
-            "seasonRate": season_rate,
-            "seasonRateSource": season_source,
+            "seasonMeanPerGame": season_mean,
+            "distributionalSeasonProbability": distributional.get("winProbability"),
+            "distribution": distributional.get("distribution"),
+            "dispersion": distributional.get("dispersion"),
+            "pushProbability": distributional.get("pushProbability"),
             "last15Rate": recent_rate,
             "last15RateSource": recent_source,
             "recentGamesUsed": recent_games,
+            "blendedRate": shrinkage.get("blendedRate"),
+            "recentBlendWeight": shrinkage.get("recentWeight"),
             "matchupFactor": matchup.get("factor"),
             "matchupFactorSource": matchup.get("source"),
+            "matchupLogitShift": (estimate or {}).get("matchupShift", {}).get("logitShift"),
+            "calibrationApplied": bool((estimate or {}).get("calibration", {}).get("applied")),
         },
         "penalties": penalties,
         "matchupFactor": matchup,
@@ -1684,6 +1734,84 @@ def _clean_contest_rank(value: Any) -> int:
         return 1
 
 
+def _apply_correlation_penalties(scored_rows: list[dict[str, Any]]) -> int:
+    """Fill the previously-dead correlationPenalty.
+
+    Within each game, a leg that is highly correlated with an
+    already-higher-merit leg adds little real payout (Stake reprices SGM
+    correlation through betFactor), so it is taxed proportionally to that
+    correlation. Recomputes score after the tax.
+    """
+    by_game: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in scored_rows:
+        by_game[str(row.get("fixtureSlug") or "unknown")].append(row)
+
+    adjusted = 0
+    for game_rows in by_game.values():
+        ordered = sorted(game_rows, key=lambda r: _float_or_none(r.get("score")) or 0.0, reverse=True)
+        for index, row in enumerate(ordered):
+            result = leg_correlation_penalty(row, ordered[:index])
+            penalty = result["penalty"]
+            row["correlationContext"] = result
+            if penalty <= 0:
+                continue
+            row["correlationPenalty"] = penalty
+            base_score = _float_or_none(row.get("score")) or 0.0
+            row["score"] = round(max(0.0, min(100.0, base_score - penalty)), 2)
+            tags = set(row.get("reasonTags") or [])
+            tags.add("correlation_redundancy_taxed")
+            row["reasonTags"] = sorted(tags)
+            adjusted += 1
+    return adjusted
+
+
+def _slate_slip_projections(ranked: list[dict[str, Any]]) -> dict[str, Any]:
+    """Per-game modeled win probability + EV for the suggested groups.
+
+    The Custom GPT still owns final leg selection; this is the money-level
+    read on each game's top group so it can prefer fewer strong legs over
+    more weak ones.
+    """
+    by_game: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in ranked:
+        by_game[str(row.get("fixtureSlug") or "unknown")].append(row)
+    projections = {
+        fixture: _slip_projection_for_legs(legs)
+        for fixture, legs in sorted(by_game.items())
+        if len(legs) >= GAME_CONTEST_MIN_LEGS
+    }
+    positive_ev = [
+        fixture
+        for fixture, proj in projections.items()
+        if (proj.get("expectedValue") or 0) > 0
+    ]
+    return {
+        "perGame": projections,
+        "positiveExpectedValueGames": sorted(positive_ev),
+        "note": (
+            "Estimated win probability uses a single-factor Gaussian copula over "
+            "calibrated leg probabilities; expected value is per 1 unit staked and "
+            "is not a final Stake SGM quote."
+        ),
+    }
+
+
+def _slip_projection_for_legs(legs: list[dict[str, Any]]) -> dict[str, Any]:
+    projection = slip_probability_and_ev(legs)
+    return {
+        "legCount": projection["legCount"],
+        "pricedLegCount": projection["pricedLegCount"],
+        "rawProductOdds": projection["rawProductOdds"],
+        "estimatedWinProbability": projection["estimatedWinProbability"],
+        "independenceWinProbability": projection["independenceWinProbability"],
+        "correlationLift": projection["correlationLift"],
+        "expectedValue": projection["expectedValue"],
+        "effectiveCorrelation": projection["effectiveCorrelation"],
+        "fullyPriced": projection["fullyPriced"],
+        "method": projection["method"],
+    }
+
+
 def _per_game_summary(
     flat_rows: list[dict[str, Any]],
     ranked: list[dict[str, Any]],
@@ -1694,12 +1822,18 @@ def _per_game_summary(
     selected_by_fixture = Counter(str(row.get("fixtureSlug") or "unknown") for row in ranked)
     accepted_by_fixture = Counter(str(row.get("fixtureSlug") or "unknown") for row in accepted)
     scanned_by_fixture = Counter(str(row.get("fixtureSlug") or "unknown") for row in flat_rows)
+    ranked_by_fixture: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in ranked:
+        ranked_by_fixture[str(row.get("fixtureSlug") or "unknown")].append(row)
     return {
         fixture: {
             "scannedRows": scanned_by_fixture[fixture],
             "acceptedRows": accepted_by_fixture[fixture],
             "returnedRows": selected_by_fixture[fixture],
             "skipped": selected_by_fixture[fixture] == 0,
+            "slipProjection": _slip_projection_for_legs(ranked_by_fixture[fixture])
+            if len(ranked_by_fixture[fixture]) >= GAME_CONTEST_MIN_LEGS
+            else None,
         }
         for fixture in fixtures
     }

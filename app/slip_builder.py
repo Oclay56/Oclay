@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from .correlation import slip_probability_and_ev
 from .mlb_props import slug_key
 
 
@@ -85,6 +86,7 @@ def build_slip_candidate_response(
         best_clean["rawProductOdds"] >= target_odds_min
         and best_clean["legCount"] >= min_legs
     )
+    best_clean["slipProbability"] = slip_probability_and_ev(best_clean.get("legs") or [])
 
     return {
         "purpose": "slip_candidate_builder",

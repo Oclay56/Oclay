@@ -49,6 +49,10 @@ from .sgm_candidate_pool import (
     build_sgm_candidate_pool_from_boards,
     compact_sgm_candidate_pool_response,
 )
+from .calibration import build_calibration_report
+from .grading import grade_pending_picks
+from .pick_ledger import PickLedger
+from .probability_engine import invalidate_calibration_cache
 from .slate import DEFAULT_TIMEZONE
 from .stake_client import StakeAPIError, StakeClient, build_http_client
 from .stake_sgm_browser import make_sgm_selection_row_id, sgm_market_filter_matches
@@ -85,6 +89,10 @@ def get_gpt_store() -> GptActionStore:
 
 def get_local_ui_job_store() -> SupabaseLocalUiJobStore:
     return SupabaseLocalUiJobStore()
+
+
+def get_pick_ledger() -> PickLedger:
+    return PickLedger()
 
 
 @app.get("/", include_in_schema=False)
@@ -1124,6 +1132,11 @@ async def mlb_stake_ui_sgm_candidate_pool(
         "failed": board_batch.get("failed"),
         "errors": board_batch.get("errors") or [],
     }
+    pool["ledger"] = _record_pool_to_ledger(
+        pool,
+        slate_date.isoformat() if slate_date else None,
+        enabled=_bool_from_body(payload, "recordToLedger", "record_to_ledger", True),
+    )
     return compact_sgm_candidate_pool_response(pool) if compact else pool
 
 
@@ -1593,6 +1606,71 @@ async def mlb_validate_selections(
     )
 
 
+@app.get("/oclay/learning/summary")
+async def oclay_learning_summary(
+    ledger: PickLedger = Depends(get_pick_ledger),
+) -> dict[str, Any]:
+    """Headline accountability metrics: graded hit rate, CLV, pick volume."""
+    return {
+        "purpose": "oclay_learning_summary",
+        "ledger": ledger.summary(),
+        "notes": [
+            "gradedHitRate is the realized win rate over settled picks.",
+            "averageClv > 0 means picks were taken at better-than-closing prices.",
+        ],
+    }
+
+
+@app.post("/oclay/learning/grade")
+async def oclay_learning_grade(
+    payload: dict[str, Any] = Body(default_factory=dict),
+    engine: MLBDataEngine = Depends(get_mlb_engine),
+    ledger: PickLedger = Depends(get_pick_ledger),
+) -> dict[str, Any]:
+    """Settle pending picks against final MLB box scores, then settle slips."""
+    slate_date = _date_from_body(payload)
+    report = await grade_pending_picks(
+        engine,
+        ledger=ledger,
+        slate_date=slate_date.isoformat() if slate_date else None,
+    )
+    return {"purpose": "oclay_grade_pending_picks", **report}
+
+
+@app.post("/oclay/learning/calibrate")
+async def oclay_learning_calibrate(
+    payload: dict[str, Any] = Body(default_factory=dict),
+    ledger: PickLedger = Depends(get_pick_ledger),
+) -> dict[str, Any]:
+    """Refit per-market calibration from graded picks and refresh the cache."""
+    persist = _bool_from_body(payload, "persist", "persist", True)
+    report = build_calibration_report(ledger=ledger, persist=persist)
+    if persist:
+        invalidate_calibration_cache()
+    return report
+
+
+@app.get("/oclay/learning/calibration-report")
+async def oclay_learning_calibration_report(
+    ledger: PickLedger = Depends(get_pick_ledger),
+) -> dict[str, Any]:
+    """Read-only calibration metrics without refitting or persisting."""
+    return build_calibration_report(ledger=ledger, persist=False)
+
+
+@app.post("/oclay/learning/closing-snapshot")
+async def oclay_learning_closing_snapshot(
+    payload: dict[str, Any] = Body(default_factory=dict),
+    ledger: PickLedger = Depends(get_pick_ledger),
+) -> dict[str, Any]:
+    """Record near-first-pitch odds for pending picks to compute CLV later."""
+    snapshots = payload.get("snapshots") or payload.get("rows") or []
+    if not isinstance(snapshots, list):
+        raise HTTPException(status_code=422, detail="snapshots must be a list of {rowId, odds}.")
+    result = ledger.record_closing_snapshot(snapshots)
+    return {"purpose": "oclay_closing_snapshot", **result}
+
+
 # Temporary compatibility aliases for the current Custom GPT action schema.
 @app.get("/gpt/mlb/matchup-prop-board", include_in_schema=False)
 async def legacy_gpt_mlb_matchup_prop_board(
@@ -1662,6 +1740,26 @@ async def _call_data_sources(callback: Any, *args: Any) -> Any:
             status_code=exc.status_code if exc.status_code < 500 else 502,
             detail={"source": "mlb", "message": exc.message},
         ) from exc
+
+
+def _record_pool_to_ledger(
+    pool: dict[str, Any],
+    slate_date: str | None,
+    *,
+    enabled: bool,
+) -> dict[str, Any]:
+    """Best-effort persistence of the scored pool for later grading.
+
+    Never raises into the API response: if the ledger is unavailable the
+    pool is still returned, just unrecorded.
+    """
+    if not enabled:
+        return {"recorded": False, "reason": "recording_disabled_by_request"}
+    try:
+        result = PickLedger().record_candidate_pool(pool, slate_date=slate_date)
+        return {"recorded": True, **result}
+    except Exception as exc:  # noqa: BLE001 - persistence must not break the response
+        return {"recorded": False, "reason": f"ledger_unavailable: {exc}"}
 
 
 def _timezone_name() -> str:
