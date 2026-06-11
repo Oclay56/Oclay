@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from rich.color import Color
+from rich.style import Style
 from rich.text import Text
 
 from .local_helper_cli import (
@@ -24,7 +26,19 @@ from .local_helper_cli import (
 BACKGROUND_GIF_RELATIVE_PATH = Path("app") / "assets" / "oclay-background.gif"
 BACKGROUND_FRAME_LIMIT = 240
 BACKGROUND_FRAME_INTERVAL_SECONDS = 0.03
-BACKGROUND_FRAME_STYLE = "#F4F6F8 on #000000"
+BACKGROUND_BLACK = "#000000"
+
+# Each particle is colored by its true brightness along a soft cool-white
+# ramp instead of being crushed into a few flat ASCII symbols. Dim flakes
+# recede as faint blue-grey, bright cores glow near white, so the field
+# reads like the source GIF's falling snow rather than blocky pixels.
+STAR_DIM_RGB = (74, 96, 138)
+STAR_BRIGHT_RGB = (244, 248, 255)
+STAR_MIN_LUMINANCE = 20.0
+STAR_LUMINANCE_GAIN = 1.7  # lift flakes dimmed by the large downscale
+STAR_GLYPH_FAINT = "·"  # soft middot
+STAR_GLYPH_SOFT = "•"   # round flake
+STAR_GLYPH_CORE = "*"   # twinkle core
 
 try:
     from textual import events
@@ -171,24 +185,27 @@ class TerminalGifBackground:
         if cached:
             return cached
 
-        frame_text = self._load_gif_frames(width, height)
-        if not frame_text:
-            frame_text = _fallback_star_frames(width, height)
-        frames = [Text(frame, style=BACKGROUND_FRAME_STYLE) for frame in frame_text]
+        frames = self._load_gif_frames(width, height)
+        if not frames:
+            frames = _fallback_star_frames(width, height)
         self._frames_by_size[key] = frames
         return frames
 
-    def _load_gif_frames(self, width: int, height: int) -> list[str]:
+    def _load_gif_frames(self, width: int, height: int) -> list[Text]:
         if not self.path.exists():
             return []
         try:
-            from PIL import Image, ImageSequence
+            from PIL import Image, ImageFilter, ImageSequence
         except Exception:
             return []
 
         try:
             with Image.open(self.path) as image:
-                raw_frames = [frame.copy().convert("L") for frame in ImageSequence.Iterator(image)]
+                # Particles are neutral white, so grayscale loses no real
+                # color and is several times cheaper to process.
+                raw_frames = [
+                    frame.copy().convert("L") for frame in ImageSequence.Iterator(image)
+                ]
         except Exception:
             return []
 
@@ -197,50 +214,104 @@ class TerminalGifBackground:
 
         step = max(1, len(raw_frames) // BACKGROUND_FRAME_LIMIT)
         sampled = raw_frames[::step][:BACKGROUND_FRAME_LIMIT]
-        return [
-            _image_to_terminal_stars(frame, width=width, height=height)
-            for frame in sampled
-        ]
+        # Dilate the sparse points so they survive the large downscale, then
+        # resample so each flake keeps a bright core and a soft halo instead
+        # of collapsing to one hard pixel.
+        dilate = _star_dilation_size(raw_frames[0].size, width, height)
+        frames: list[Text] = []
+        for frame in sampled:
+            softened = frame.filter(ImageFilter.MaxFilter(dilate)) if dilate >= 3 else frame
+            resized = softened.resize((max(1, width), max(1, height)), Image.BILINEAR)
+            frames.append(_image_to_star_text(resized, width=width, height=height))
+        return frames
 
 
-def _image_to_terminal_stars(image: Any, *, width: int, height: int) -> str:
-    rows: list[str] = []
-    source_width, source_height = image.size
-    pixels = image.load()
+def _star_dilation_size(source_size: tuple[int, int], width: int, height: int) -> int:
+    source_width, source_height = source_size
+    ratio = max(source_width / max(width, 1), source_height / max(height, 1))
+    size = int(ratio)
+    if size % 2 == 0:
+        size += 1
+    return max(3, min(size, 5))
+
+
+def _star_glyph_and_color(luminance: float) -> tuple[str, tuple[int, int, int] | None, bool]:
+    if luminance < STAR_MIN_LUMINANCE:
+        return " ", None, False
+    span = 255.0 - STAR_MIN_LUMINANCE
+    t = max(0.0, min(1.0, (luminance - STAR_MIN_LUMINANCE) / span)) ** 0.85
+    color = tuple(
+        round(STAR_DIM_RGB[i] + (STAR_BRIGHT_RGB[i] - STAR_DIM_RGB[i]) * t)
+        for i in range(3)
+    )
+    if t < 0.16:
+        glyph = STAR_GLYPH_FAINT
+    elif t < 0.42:
+        glyph = STAR_GLYPH_SOFT
+    else:
+        glyph = STAR_GLYPH_CORE
+    return glyph, color, t >= 0.7
+
+
+# Luminance is a bounded 0..255 integer after gain, so resolve every flake's
+# glyph, color span, and weight once per level instead of per pixel.
+def _build_star_lut() -> list[tuple[str, Style] | None]:
+    lut: list[tuple[str, Style] | None] = []
+    for level in range(256):
+        glyph, color, bold = _star_glyph_and_color(float(level))
+        if color is None:
+            lut.append(None)
+        else:
+            lut.append((glyph, Style(color=Color.from_rgb(*color), bold=bold)))
+    return lut
+
+
+_STAR_LUT = _build_star_lut()
+
+
+def _render_star_text(levels: list[int], *, width: int, height: int) -> Text:
+    text = Text(style=f"on {BACKGROUND_BLACK}")
+    lut = _STAR_LUT
     for y in range(height):
-        source_y0 = int(y * source_height / height)
-        source_y1 = max(source_y0 + 1, int((y + 1) * source_height / height))
-        chars: list[str] = []
+        base = y * width
+        space_run = 0
         for x in range(width):
-            source_x0 = int(x * source_width / width)
-            source_x1 = max(source_x0 + 1, int((x + 1) * source_width / width))
-            value = 0
-            for source_y in range(source_y0, min(source_y1, source_height)):
-                for source_x in range(source_x0, min(source_x1, source_width)):
-                    value = max(value, int(pixels[source_x, source_y]))
-            if value >= 235:
-                chars.append("*")
-            elif value >= 160:
-                chars.append("+")
-            elif value >= 60:
-                chars.append(".")
-            else:
-                chars.append(" ")
-        rows.append("".join(chars))
-    return "\n".join(rows)
+            cell = lut[levels[base + x]]
+            if cell is None:
+                space_run += 1
+                continue
+            if space_run:
+                text.append(" " * space_run)
+                space_run = 0
+            text.append(cell[0], style=cell[1])
+        if space_run:
+            text.append(" " * space_run)
+        if y != height - 1:
+            text.append("\n")
+    return text
 
 
-def _fallback_star_frames(width: int, height: int) -> list[str]:
-    frames: list[str] = []
+def _image_to_star_text(image: Any, *, width: int, height: int) -> Text:
+    gray = image if image.mode == "L" else image.convert("L")
+    gain = STAR_LUMINANCE_GAIN
+    levels = [min(255, int(value * gain)) for value in gray.tobytes()]
+    return _render_star_text(levels, width=width, height=height)
+
+
+def _fallback_star_frames(width: int, height: int) -> list[Text]:
+    frames: list[Text] = []
     for frame_index in range(24):
-        rows: list[str] = []
+        levels: list[int] = []
         for y in range(height):
-            chars: list[str] = []
             for x in range(width):
                 seed = (x * 37 + y * 67 + frame_index * 11) % 211
-                chars.append("." if seed in {0, 7} else "*" if seed == 13 else " ")
-            rows.append("".join(chars))
-        frames.append("\n".join(rows))
+                if seed == 13:
+                    levels.append(235)
+                elif seed in {0, 7}:
+                    levels.append(95)
+                else:
+                    levels.append(0)
+        frames.append(_render_star_text(levels, width=width, height=height))
     return frames
 
 

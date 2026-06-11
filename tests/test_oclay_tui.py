@@ -61,12 +61,16 @@ def test_animated_background_asset_renders_terminal_frame():
 
     assert path.exists()
 
-    frame = TerminalGifBackground(path).render(32, 8, 0).plain
+    rendered = TerminalGifBackground(path).render(32, 8, 0)
+    frame = rendered.plain
     lines = frame.splitlines()
 
     assert len(lines) == 8
     assert all(len(line) == 32 for line in lines)
-    assert any(char in frame for char in ".*+")
+    # Particles now render as soft graded dots, each carrying its own color
+    # span rather than a single flat style.
+    assert any(char in frame for char in "·•*")
+    assert any(span.style is not None for span in rendered.spans)
 
 
 def test_animated_background_keeps_source_gif_pace():
