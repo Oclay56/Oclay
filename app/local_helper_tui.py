@@ -10,8 +10,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from rich.color import Color
-from rich.style import Style
 from rich.text import Text
 
 from .local_helper_cli import (
@@ -23,22 +21,8 @@ from .local_helper_cli import (
     stake_site_profile,
 )
 
-BACKGROUND_GIF_RELATIVE_PATH = Path("app") / "assets" / "oclay-background.gif"
-BACKGROUND_FRAME_LIMIT = 240
-BACKGROUND_FRAME_INTERVAL_SECONDS = 0.03
-BACKGROUND_BLACK = "#000000"
-
-# Each particle is colored by its true brightness along a soft cool-white
-# ramp instead of being crushed into a few flat ASCII symbols. Dim flakes
-# recede as faint blue-grey, bright cores glow near white, so the field
-# reads like the source GIF's falling snow rather than blocky pixels.
-STAR_DIM_RGB = (74, 96, 138)
-STAR_BRIGHT_RGB = (244, 248, 255)
-STAR_MIN_LUMINANCE = 20.0
-STAR_LUMINANCE_GAIN = 1.7  # lift flakes dimmed by the large downscale
-STAR_GLYPH_FAINT = "·"  # soft middot
-STAR_GLYPH_SOFT = "•"   # round flake
-STAR_GLYPH_CORE = "*"   # twinkle core
+# Solid background fill for the whole TUI (no wallpaper, no animation).
+BACKGROUND_FILL = "#1B2A3C"
 
 try:
     from textual import events
@@ -58,8 +42,8 @@ except Exception as exc:  # pragma: no cover - depends on local optional package
 
 
 DEFAULT_TUI_PALETTE = {
-    "background": "#111111",
-    "panel": "#101010",
+    "background": BACKGROUND_FILL,
+    "panel": BACKGROUND_FILL,
     "panelBorder": "#5A5A5A",
     "shellBorder": "#6A6A6A",
     "mutedText": "#7F7F7F",
@@ -69,10 +53,10 @@ DEFAULT_TUI_PALETTE = {
     "readyText": "#00E701",
     "activeText": "#74B9FF",
     "errorText": "#FF6B8A",
-    "rowHover": "#3A3A3A",
+    "rowHover": "#2A3F56",
     "rowText": "#B8B19C",
     "shortcutText": "#7F7F7F",
-    "outputPanel": "#101010",
+    "outputPanel": BACKGROUND_FILL,
 }
 MENU_ROW_WIDTH = 94
 TITLE_ROW_WIDTH = 106
@@ -162,157 +146,6 @@ def save_tui_palette(
 
 def textual_dependency_status() -> dict[str, Any]:
     return {"available": TEXTUAL_AVAILABLE, "error": TEXTUAL_IMPORT_ERROR}
-
-
-def animated_background_path(*, root_dir: Path = ROOT_DIR) -> Path:
-    return root_dir / BACKGROUND_GIF_RELATIVE_PATH
-
-
-class TerminalGifBackground:
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        self._frames_by_size: dict[tuple[int, int], list[Text]] = {}
-
-    def render(self, width: int, height: int, frame_index: int) -> Text:
-        clean_width = max(1, int(width or 1))
-        clean_height = max(1, int(height or 1))
-        frames = self._frames_for_size(clean_width, clean_height)
-        return frames[frame_index % len(frames)]
-
-    def _frames_for_size(self, width: int, height: int) -> list[Text]:
-        key = (width, height)
-        cached = self._frames_by_size.get(key)
-        if cached:
-            return cached
-
-        frames = self._load_gif_frames(width, height)
-        if not frames:
-            frames = _fallback_star_frames(width, height)
-        self._frames_by_size[key] = frames
-        return frames
-
-    def _load_gif_frames(self, width: int, height: int) -> list[Text]:
-        if not self.path.exists():
-            return []
-        try:
-            from PIL import Image, ImageFilter, ImageSequence
-        except Exception:
-            return []
-
-        try:
-            with Image.open(self.path) as image:
-                # Particles are neutral white, so grayscale loses no real
-                # color and is several times cheaper to process.
-                raw_frames = [
-                    frame.copy().convert("L") for frame in ImageSequence.Iterator(image)
-                ]
-        except Exception:
-            return []
-
-        if not raw_frames:
-            return []
-
-        step = max(1, len(raw_frames) // BACKGROUND_FRAME_LIMIT)
-        sampled = raw_frames[::step][:BACKGROUND_FRAME_LIMIT]
-        # Dilate the sparse points so they survive the large downscale, then
-        # resample so each flake keeps a bright core and a soft halo instead
-        # of collapsing to one hard pixel.
-        dilate = _star_dilation_size(raw_frames[0].size, width, height)
-        frames: list[Text] = []
-        for frame in sampled:
-            softened = frame.filter(ImageFilter.MaxFilter(dilate)) if dilate >= 3 else frame
-            resized = softened.resize((max(1, width), max(1, height)), Image.BILINEAR)
-            frames.append(_image_to_star_text(resized, width=width, height=height))
-        return frames
-
-
-def _star_dilation_size(source_size: tuple[int, int], width: int, height: int) -> int:
-    source_width, source_height = source_size
-    ratio = max(source_width / max(width, 1), source_height / max(height, 1))
-    size = int(ratio)
-    if size % 2 == 0:
-        size += 1
-    return max(3, min(size, 5))
-
-
-def _star_glyph_and_color(luminance: float) -> tuple[str, tuple[int, int, int] | None, bool]:
-    if luminance < STAR_MIN_LUMINANCE:
-        return " ", None, False
-    span = 255.0 - STAR_MIN_LUMINANCE
-    t = max(0.0, min(1.0, (luminance - STAR_MIN_LUMINANCE) / span)) ** 0.85
-    color = tuple(
-        round(STAR_DIM_RGB[i] + (STAR_BRIGHT_RGB[i] - STAR_DIM_RGB[i]) * t)
-        for i in range(3)
-    )
-    if t < 0.16:
-        glyph = STAR_GLYPH_FAINT
-    elif t < 0.42:
-        glyph = STAR_GLYPH_SOFT
-    else:
-        glyph = STAR_GLYPH_CORE
-    return glyph, color, t >= 0.7
-
-
-# Luminance is a bounded 0..255 integer after gain, so resolve every flake's
-# glyph, color span, and weight once per level instead of per pixel.
-def _build_star_lut() -> list[tuple[str, Style] | None]:
-    lut: list[tuple[str, Style] | None] = []
-    for level in range(256):
-        glyph, color, bold = _star_glyph_and_color(float(level))
-        if color is None:
-            lut.append(None)
-        else:
-            lut.append((glyph, Style(color=Color.from_rgb(*color), bold=bold)))
-    return lut
-
-
-_STAR_LUT = _build_star_lut()
-
-
-def _render_star_text(levels: list[int], *, width: int, height: int) -> Text:
-    text = Text(style=f"on {BACKGROUND_BLACK}")
-    lut = _STAR_LUT
-    for y in range(height):
-        base = y * width
-        space_run = 0
-        for x in range(width):
-            cell = lut[levels[base + x]]
-            if cell is None:
-                space_run += 1
-                continue
-            if space_run:
-                text.append(" " * space_run)
-                space_run = 0
-            text.append(cell[0], style=cell[1])
-        if space_run:
-            text.append(" " * space_run)
-        if y != height - 1:
-            text.append("\n")
-    return text
-
-
-def _image_to_star_text(image: Any, *, width: int, height: int) -> Text:
-    gray = image if image.mode == "L" else image.convert("L")
-    gain = STAR_LUMINANCE_GAIN
-    levels = [min(255, int(value * gain)) for value in gray.tobytes()]
-    return _render_star_text(levels, width=width, height=height)
-
-
-def _fallback_star_frames(width: int, height: int) -> list[Text]:
-    frames: list[Text] = []
-    for frame_index in range(24):
-        levels: list[int] = []
-        for y in range(height):
-            for x in range(width):
-                seed = (x * 37 + y * 67 + frame_index * 11) % 211
-                if seed == 13:
-                    levels.append(235)
-                elif seed in {0, 7}:
-                    levels.append(95)
-                else:
-                    levels.append(0)
-        frames.append(_render_star_text(levels, width=width, height=height))
-    return frames
 
 
 def console_input_mode_without_text_selection(mode: int) -> int:
@@ -488,23 +321,10 @@ if TEXTUAL_AVAILABLE:
         return TuiAction("palette-row", label, "enter", "", "palette-row", "Palette")
 
 
-    class AnimatedBackgroundContainer(Container):
-        def render(self) -> Text:
-            app = getattr(self, "app", None)
-            background = getattr(app, "background", None)
-            if background is None:
-                return Text("", style="#F4F6F8 on #000000")
-            return background.render(
-                max(1, self.size.width),
-                max(1, self.size.height),
-                int(getattr(app, "_background_frame", 0)),
-            )
-
-
     class OclayTui(App[None]):
         CSS = f"""
         Screen {{
-            background: #000000;
+            background: {BACKGROUND_FILL};
             color: {DEFAULT_TUI_PALETTE["mutedText"]};
             overflow: hidden hidden;
         }}
@@ -522,13 +342,13 @@ if TEXTUAL_AVAILABLE:
             align: center middle;
             height: 1fr;
             width: 100%;
-            background: #000000;
+            background: {BACKGROUND_FILL};
         }}
 
         #shell-stack {{
             width: 116;
             height: 24;
-            background: transparent;
+            background: {BACKGROUND_FILL};
         }}
 
         #shell {{
@@ -536,7 +356,7 @@ if TEXTUAL_AVAILABLE:
             height: 22;
             max-height: 22;
             min-height: 22;
-            background: transparent;
+            background: {BACKGROUND_FILL};
             border: round {DEFAULT_TUI_PALETTE["shellBorder"]};
             padding: 1 4;
             overflow: hidden hidden;
@@ -608,6 +428,7 @@ if TEXTUAL_AVAILABLE:
         .command-label {{
             width: {MENU_ROW_WIDTH};
             height: 1;
+            background: transparent;
         }}
 
         #page-title {{
@@ -694,8 +515,6 @@ if TEXTUAL_AVAILABLE:
             self.root_dir = root_dir
             self.display_workspace = Path.home()
             self.palette = load_tui_palette(root_dir=root_dir)
-            self.background = TerminalGifBackground(animated_background_path(root_dir=root_dir))
-            self._background_frame = 0
             self.ui_thread: threading.Thread | None = None
             self.cli = OclayCli(
                 root_dir=root_dir,
@@ -715,10 +534,11 @@ if TEXTUAL_AVAILABLE:
             self._output_lines: list[str] = []
             self._output_scroll = 0
             self._page_result = ""
+            self._last_pointer_action: tuple[str, float] = ("", 0.0)
 
         def compose(self) -> ComposeResult:
             yield Static("", id="workspace-top")
-            with AnimatedBackgroundContainer(id="screen-root"):
+            with Container(id="screen-root"):
                 with Vertical(id="shell-stack"):
                     with Vertical(id="shell"):
                         yield Static("", id="title")
@@ -755,9 +575,7 @@ if TEXTUAL_AVAILABLE:
             self.ui_thread = threading.current_thread()
             self._setup_state = self._read_setup_state()
             self._apply_palette()
-            self._refresh_animated_background()
             self._refresh_layout(force=True)
-            self.set_interval(BACKGROUND_FRAME_INTERVAL_SECONDS, self._advance_background)
             self.set_interval(0.45, self._tick)
 
         def _apply_palette(self) -> None:
@@ -775,21 +593,22 @@ if TEXTUAL_AVAILABLE:
             palette_targets = self.query_one("#palette-targets", ListView)
             palette_colors = self.query_one("#palette-colors", ListView)
 
-            root.styles.background = "#000000"
-            workspace_top.styles.background = "transparent"
-            footer_stable.styles.background = "transparent"
-            shell_stack.styles.background = "transparent"
-            shell.styles.background = "transparent"
+            fill = self.palette["background"]
+            root.styles.background = fill
+            workspace_top.styles.background = fill
+            footer_stable.styles.background = fill
+            shell_stack.styles.background = fill
+            shell.styles.background = fill
             shell.styles.border = ("round", self.palette["shellBorder"])
-            bottom_fill.styles.background = "transparent"
-            menu_wrap.styles.background = "transparent"
-            actions.styles.background = "transparent"
+            bottom_fill.styles.background = fill
+            menu_wrap.styles.background = fill
+            actions.styles.background = fill
             output_panel.styles.background = self.palette["outputPanel"]
             output_panel.styles.border = ("round", self.palette["panelBorder"])
             output_text.styles.background = self.palette["outputPanel"]
-            palette_panel.styles.background = "transparent"
-            palette_targets.styles.background = "transparent"
-            palette_colors.styles.background = "transparent"
+            palette_panel.styles.background = fill
+            palette_targets.styles.background = fill
+            palette_colors.styles.background = fill
 
             for selector, color in (
                 ("#workspace-top", "mutedText"),
@@ -806,21 +625,11 @@ if TEXTUAL_AVAILABLE:
             ):
                 self.query_one(selector, Static).styles.color = self.palette[color]
             for row in self.query(CommandRow):
-                row.query_one(Label).update(rich_tui_action_row(row.tui_action, palette=self.palette))
-
-        def _advance_background(self) -> None:
-            self._background_frame += 1
-            self._refresh_animated_background()
-
-        def _refresh_animated_background(self) -> None:
-            try:
-                background = self.query_one("#screen-root", AnimatedBackgroundContainer)
-            except Exception:
-                return
-            background.refresh()
+                label = row.query_one(Label)
+                label.styles.background = self.palette["background"]
+                label.update(rich_tui_action_row(row.tui_action, palette=self.palette))
 
         def _tick(self) -> None:
-            disable_terminal_text_selection()
             self.cli.drain_output()
             if self._status_is_active():
                 self._status_frame = (self._status_frame + 1) % 3
@@ -960,6 +769,23 @@ if TEXTUAL_AVAILABLE:
                 self.query_one("#palette-colors", ListView).focus()
             self._refresh_layout(force=True)
 
+        def _clicked_tui_action(self, widget: Any) -> TuiAction | None:
+            current = widget
+            while current is not None:
+                action = getattr(current, "tui_action", None)
+                if isinstance(action, TuiAction):
+                    return action
+                current = getattr(current, "parent", None)
+            return None
+
+        def _run_pointer_action(self, action: TuiAction) -> None:
+            now = time.monotonic()
+            last_action_id, last_at = self._last_pointer_action
+            if action.action_id == last_action_id and now - last_at < 0.25:
+                return
+            self._last_pointer_action = (action.action_id, now)
+            self.action_run_action(action.action_id)
+
         def on_list_view_selected(self, event: ListView.Selected) -> None:
             if isinstance(event.item, PaletteTargetRow):
                 self._selected_palette_target = event.item.target_id
@@ -970,7 +796,19 @@ if TEXTUAL_AVAILABLE:
                 return
             action = getattr(event.item, "tui_action", None)
             if isinstance(action, TuiAction):
-                self.action_run_action(action.action_id)
+                self._run_pointer_action(action)
+
+        def on_key(self, event: events.Key) -> None:
+            if event.key == "escape" and self._active_action is not None:
+                event.stop()
+                self.action_back()
+
+        def on_click(self, event: events.Click) -> None:
+            widget = getattr(event, "widget", None)
+            action = self._clicked_tui_action(widget)
+            if action is not None:
+                event.stop()
+                self._run_pointer_action(action)
 
         def _apply_palette_color(self, color: str) -> None:
             self.palette[self._selected_palette_target] = color
