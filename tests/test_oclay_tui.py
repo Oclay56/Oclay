@@ -1,3 +1,5 @@
+import os
+
 from app.local_helper_cli import APP_DISPLAY_NAME
 from app.local_helper_tui import (
     BACKGROUND_FILL,
@@ -8,9 +10,11 @@ from app.local_helper_tui import (
     clean_tui_palette,
     format_tui_action_row,
     hex_to_rgb,
+    hex_to_windows_colorref,
     rich_title_row,
     rgb_to_hex,
     textual_dependency_status,
+    windows_colorref_to_hex,
 )
 
 
@@ -59,6 +63,11 @@ def test_textual_dependency_probe_shape():
     assert set(status) == {"available", "error"}
 
 
+def test_tui_forces_truecolor_rendering():
+    assert os.environ["TEXTUAL_COLOR_SYSTEM"] == "truecolor"
+    assert os.environ["COLORTERM"] == "truecolor"
+
+
 def test_background_is_restored_black_fill():
     assert BACKGROUND_FILL == "#111111"
     assert DEFAULT_TUI_PALETTE["background"] == "#111111"
@@ -95,3 +104,12 @@ def test_rgb_hex_helpers_clamp_and_parse():
     assert rgb_to_hex(32, 42, 68) == "#202A44"
     assert rgb_to_hex(-1, 300, 68) == "#00FF44"
     assert hex_to_rgb("#202A44") == (32, 42, 68)
+
+
+def test_windows_colorref_conversion_preserves_rgb_channels():
+    colorref = hex_to_windows_colorref("#202A44")
+
+    assert colorref == 0x442A20
+    assert windows_colorref_to_hex(colorref) == "#202A44"
+    assert windows_colorref_to_hex(0x0000FF) == "#FF0000"
+    assert windows_colorref_to_hex(0xFF0000) == "#0000FF"

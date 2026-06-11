@@ -27,6 +27,9 @@ PANEL_BORDER_COLOR = "#5A5A5A"
 SHELL_BORDER_COLOR = "#6A6A6A"
 ROW_HOVER_FILL = "#3A3A3A"
 
+os.environ.setdefault("COLORTERM", "truecolor")
+os.environ["TEXTUAL_COLOR_SYSTEM"] = "truecolor"
+
 try:
     from textual import events
     from textual.app import App, ComposeResult
@@ -318,6 +321,16 @@ def hex_to_rgb(value: str) -> tuple[int, int, int]:
     return int(clean[1:3], 16), int(clean[3:5], 16), int(clean[5:7], 16)
 
 
+def hex_to_windows_colorref(value: str) -> int:
+    r, g, b = hex_to_rgb(value)
+    return r | (g << 8) | (b << 16)
+
+
+def windows_colorref_to_hex(value: int) -> str:
+    colorref = int(value)
+    return rgb_to_hex(colorref & 0xFF, (colorref >> 8) & 0xFF, (colorref >> 16) & 0xFF)
+
+
 def rgb_target_label(target_id: str) -> str:
     return "Background" if target_id == "background" else "Center Console"
 
@@ -350,6 +363,45 @@ def rich_rgb_target_row(
 
 def choose_native_rgb_color(initial_color: str, *, title: str = "OCLAY RGB") -> str | None:
     clean_initial = initial_color.upper() if _is_hex_color(initial_color) else DEFAULT_TUI_PALETTE["background"]
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class CHOOSECOLORW(ctypes.Structure):
+            _fields_ = [
+                ("lStructSize", wintypes.DWORD),
+                ("hwndOwner", wintypes.HWND),
+                ("hInstance", wintypes.HWND),
+                ("rgbResult", wintypes.COLORREF),
+                ("lpCustColors", ctypes.POINTER(wintypes.COLORREF)),
+                ("Flags", wintypes.DWORD),
+                ("lCustData", wintypes.LPARAM),
+                ("lpfnHook", wintypes.LPVOID),
+                ("lpTemplateName", wintypes.LPCWSTR),
+            ]
+
+        CC_RGBINIT = 0x00000001
+        CC_FULLOPEN = 0x00000002
+        CC_ANYCOLOR = 0x00000100
+        custom_colors = (wintypes.COLORREF * 16)(*[hex_to_windows_colorref(clean_initial)] * 16)
+        choose_color = ctypes.windll.comdlg32.ChooseColorW
+        choose_color.argtypes = [ctypes.POINTER(CHOOSECOLORW)]
+        choose_color.restype = wintypes.BOOL
+        get_foreground_window = ctypes.windll.user32.GetForegroundWindow
+        get_foreground_window.argtypes = []
+        get_foreground_window.restype = wintypes.HWND
+        dialog = CHOOSECOLORW()
+        dialog.lStructSize = ctypes.sizeof(CHOOSECOLORW)
+        dialog.hwndOwner = get_foreground_window()
+        dialog.rgbResult = hex_to_windows_colorref(clean_initial)
+        dialog.lpCustColors = custom_colors
+        dialog.Flags = CC_RGBINIT | CC_FULLOPEN | CC_ANYCOLOR
+        if choose_color(ctypes.byref(dialog)):
+            return windows_colorref_to_hex(dialog.rgbResult)
+        return None
+    except Exception:
+        pass
+
     root = None
     try:
         import tkinter as tk
@@ -360,16 +412,16 @@ def choose_native_rgb_color(initial_color: str, *, title: str = "OCLAY RGB") -> 
         root.attributes("-topmost", True)
         root.update()
         _rgb, hex_color = colorchooser.askcolor(color=clean_initial, title=title, parent=root)
+        if isinstance(hex_color, str) and _is_hex_color(hex_color):
+            return hex_color.upper()
     except Exception:
-        return None
+        pass
     finally:
         if root is not None:
             try:
                 root.destroy()
             except Exception:
                 pass
-    if isinstance(hex_color, str) and _is_hex_color(hex_color):
-        return hex_color.upper()
     return None
 
 
