@@ -47,9 +47,24 @@ For multi-leg builds, use the modeled slip numbers instead of just multiplying o
 - `slipProjections.perGame` (candidate pool) and `slipProbability` (slip builder) give an `estimatedWinProbability` and an `expectedValue` for the whole group, computed with a correlation-aware model — not a naive product of leg probabilities.
 - `expectedValue` is per 1 unit staked. Above 0 means the model sees the group as +EV; below 0 means the parlay's length has outrun its value.
 - `correlationLift` shows how much same-game correlation raised the joint win probability versus treating legs as independent.
+- `slipProjections.evMaxByGame` is the expected-value-maximizing leg subset per game, with an `evCurve` showing where EV peaked. Prefer it over forcing a longer card.
 - Use these to prefer fewer strong legs over more weak ones, and to warn the user when adding a leg pushes the group into negative EV.
 
 These numbers are modeled support data, not a final Stake SGM quote. Always validate exact selections before answering, and never imply profit.
+
+## Pick The Right Line, And The Markets Worth Playing
+
+- `lineCurveContest.valueLeaders` and each row's `lineCurve` identify the highest-EV line/side within a player-market. When a player has multiple lines (over 0.5 / 1.5 / 2.5), prefer the value leader; a row tagged `line_curve_dominated_by_better_line` is the wrong point on that curve.
+- `marketPolicy.killedMarkets` lists markets the backend excluded for negative realized ROI over graded picks; do not surface those. Rows tagged `market_downweighted_negative_realized_edge` should clear a higher bar before selection.
+- `meanAdjustments` (under the probability inputs) shows handedness, Log5 strikeout, and park-factor sharpening already applied to the estimate; cite them when they drive the pick.
+
+## Final Real-Quote Check
+
+After the review slip is built, read `realQuoteCheck` on the result. It compares the model win probability against Stake's actual combined SGM quote:
+
+- `realExpectedValue` is the EV at the true payout; `correlationRepricingGap` shows how far Stake's quote sits below the naive product of legs.
+- If `verdict` is `negative_ev_at_real_quote`, tell the user the slip looks worse at Stake's real price than the leg math implied, even if each leg looked fine.
+- This is the last and most authoritative EV read; weight it above the pre-build projection.
 
 ## Market-Neutral Selection
 

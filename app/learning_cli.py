@@ -19,10 +19,12 @@ import json
 from typing import Any
 
 from .calibration import build_calibration_report
+from .correlation_calibration import build_correlation_estimates
 from .grading import grade_pending_picks
 from .mlb_data import MLBDataEngine, MLBStatsClient, build_mlb_http_client
 from .pick_ledger import PickLedger
 from .probability_engine import invalidate_calibration_cache
+from .timing import build_timing_plan, games_from_mlb_schedule
 
 
 async def _grade(slate_date: str | None) -> dict[str, Any]:
@@ -32,12 +34,25 @@ async def _grade(slate_date: str | None) -> dict[str, Any]:
         return await grade_pending_picks(engine, ledger=ledger, slate_date=slate_date)
 
 
+async def _timing(slate_date: str | None) -> dict[str, Any]:
+    from datetime import date
+
+    target = slate_date or date.today().isoformat()
+    async with build_mlb_http_client() as http_client:
+        engine = MLBDataEngine(MLBStatsClient(http_client))
+        schedule = await engine.get_schedule(target)
+    return build_timing_plan(games_from_mlb_schedule(schedule))
+
+
 def _calibrate() -> dict[str, Any]:
     report = build_calibration_report(persist=True)
+    correlations = build_correlation_estimates(persist=True)
     invalidate_calibration_cache()
     return {
         "gradedSamples": report["gradedSamples"],
         "marketsCorrected": len(report["corrections"]),
+        "killedMarkets": report.get("killedMarkets") or [],
+        "correlationCategoriesMeasured": correlations["categoriesMeasured"],
         "overall": report["overall"],
     }
 
@@ -49,8 +64,11 @@ def main(argv: list[str] | None = None) -> int:
     grade_cmd = sub.add_parser("grade", help="Settle pending picks against MLB box scores.")
     grade_cmd.add_argument("--date", default=None, help="Slate date YYYY-MM-DD (default: all pending).")
 
-    sub.add_parser("calibrate", help="Refit per-market calibration from graded picks.")
+    sub.add_parser("calibrate", help="Refit calibration, market policy, and correlations.")
     sub.add_parser("summary", help="Print ledger accountability metrics.")
+
+    timing_cmd = sub.add_parser("timing", help="Print games due for snapshot/lineup rescan.")
+    timing_cmd.add_argument("--date", default=None, help="Slate date YYYY-MM-DD.")
 
     loop_cmd = sub.add_parser("loop", help="Grade then calibrate in one pass.")
     loop_cmd.add_argument("--date", default=None, help="Slate date YYYY-MM-DD.")
@@ -63,6 +81,8 @@ def main(argv: list[str] | None = None) -> int:
         result = _calibrate()
     elif args.command == "summary":
         result = PickLedger().summary()
+    elif args.command == "timing":
+        result = asyncio.run(_timing(args.date))
     elif args.command == "loop":
         graded = asyncio.run(_grade(args.date))
         calibrated = _calibrate()

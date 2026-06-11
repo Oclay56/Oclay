@@ -27,6 +27,12 @@ from .pick_ledger import GRADE_WIN, PickLedger
 # slope=1), i.e. "trust the model" until data earns a correction.
 _PRIOR_STRENGTH = 25.0
 _MIN_SAMPLES_TO_FIT = 30
+
+# Market kill-switch thresholds. A market needs this many graded edge picks
+# before its realized ROI can gate it, so a cold streak alone never kills it.
+_MARKET_POLICY_MIN_SAMPLES = 60
+_EXCLUDE_ROI_THRESHOLD = -0.06
+_DOWNWEIGHT_ROI_THRESHOLD = -0.01
 _BUCKET_EDGES = (0.0, 0.35, 0.45, 0.5, 0.55, 0.6, 0.7, 0.85, 1.0)
 _PROB_FLOOR = 0.02
 _PROB_CEILING = 0.98
@@ -49,8 +55,11 @@ def build_calibration_report(
     by_reliability = _grouped_hit_rate(samples, key="reliability_band")
 
     corrections = _fit_all_corrections(samples)
-    if persist and corrections:
-        ledger.save_calibrations(corrections)
+    market_policies = build_market_policies(graded)
+    if persist:
+        if corrections:
+            ledger.save_calibrations(corrections)
+        ledger.save_market_policies(market_policies)
 
     return {
         "purpose": "probability_calibration_report",
@@ -61,13 +70,72 @@ def build_calibration_report(
         "byReliabilityBand": by_reliability,
         "corrections": corrections,
         "correctionsPersisted": bool(persist and corrections),
+        "marketPolicies": market_policies,
+        "killedMarkets": sorted(
+            market for market, policy in market_policies.items() if policy["status"] == "exclude"
+        ),
         "notes": [
             "Brier and log loss are lower-is-better; a 50/50 coin scores Brier 0.25.",
             "Reliability buckets compare predicted probability against observed hit rate.",
             "Corrections are Platt-scaled per market and regularized toward the identity map.",
             "Corrections only meaningfully bend estimates once a market has a few hundred graded picks.",
+            "Market policies gate markets whose model edge has not paid off over enough graded picks.",
         ],
     }
+
+
+def build_market_policies(graded_rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Per-market kill-switch from realized ROI on the picks we would act on.
+
+    For each market, measure the realized flat-stake ROI of graded picks that
+    carried a positive model edge. A market that loses money over a real
+    sample is excluded; a marginally negative one is downweighted. This is the
+    "stop playing the games you lose" gate.
+    """
+    by_market: dict[str, list[dict[str, Any]]] = {}
+    for row in graded_rows:
+        outcome = str(row.get("outcome") or "")
+        if outcome not in {GRADE_WIN, "loss"}:
+            continue
+        by_market.setdefault(str(row.get("market_key") or "unknown"), []).append(row)
+
+    policies: dict[str, dict[str, Any]] = {}
+    for market, rows in by_market.items():
+        edge_rows = [r for r in rows if (_float_or_none(r.get("edge")) or 0.0) > 0]
+        sample = edge_rows if len(edge_rows) >= _MARKET_POLICY_MIN_SAMPLES else rows
+        n = len(sample)
+        roi = _realized_roi(sample)
+        hit_rate = sum(1 for r in sample if r.get("outcome") == GRADE_WIN) / n if n else None
+        if n < _MARKET_POLICY_MIN_SAMPLES or roi is None:
+            status = "insufficient_data"
+        elif roi <= _EXCLUDE_ROI_THRESHOLD:
+            status = "exclude"
+        elif roi < _DOWNWEIGHT_ROI_THRESHOLD:
+            status = "downweight"
+        else:
+            status = "ok"
+        policies[market] = {
+            "status": status,
+            "samples": n,
+            "edgePickSample": len(edge_rows),
+            "realizedRoi": round(roi, 4) if roi is not None else None,
+            "hitRate": round(hit_rate, 4) if hit_rate is not None else None,
+        }
+    return policies
+
+
+def _realized_roi(rows: list[dict[str, Any]]) -> float | None:
+    """Mean flat-stake profit per graded pick at the odds taken."""
+    pnl: list[float] = []
+    for row in rows:
+        odds = _float_or_none(row.get("odds"))
+        outcome = str(row.get("outcome") or "")
+        if odds is None or odds <= 1.0 or outcome not in {GRADE_WIN, "loss"}:
+            continue
+        pnl.append((odds - 1.0) if outcome == GRADE_WIN else -1.0)
+    if not pnl:
+        return None
+    return sum(pnl) / len(pnl)
 
 
 def refit_and_persist(*, ledger: PickLedger | None = None) -> dict[str, Any]:

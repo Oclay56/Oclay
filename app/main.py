@@ -50,9 +50,12 @@ from .sgm_candidate_pool import (
     compact_sgm_candidate_pool_response,
 )
 from .calibration import build_calibration_report
+from .correlation_calibration import build_correlation_estimates
 from .grading import grade_pending_picks
 from .pick_ledger import PickLedger
 from .probability_engine import invalidate_calibration_cache
+from .real_quote import real_quote_check_from_result
+from .timing import build_timing_plan, games_from_mlb_schedule
 from .slate import DEFAULT_TIMEZONE
 from .stake_client import StakeAPIError, StakeClient, build_http_client
 from .stake_sgm_browser import make_sgm_selection_row_id, sgm_market_filter_matches
@@ -1642,11 +1645,13 @@ async def oclay_learning_calibrate(
     payload: dict[str, Any] = Body(default_factory=dict),
     ledger: PickLedger = Depends(get_pick_ledger),
 ) -> dict[str, Any]:
-    """Refit per-market calibration from graded picks and refresh the cache."""
+    """Refit calibration, market policy, and correlations; refresh the cache."""
     persist = _bool_from_body(payload, "persist", "persist", True)
     report = build_calibration_report(ledger=ledger, persist=persist)
+    correlations = build_correlation_estimates(ledger=ledger, persist=persist)
     if persist:
         invalidate_calibration_cache()
+    report["correlationEstimates"] = correlations
     return report
 
 
@@ -1656,6 +1661,25 @@ async def oclay_learning_calibration_report(
 ) -> dict[str, Any]:
     """Read-only calibration metrics without refitting or persisting."""
     return build_calibration_report(ledger=ledger, persist=False)
+
+
+@app.post("/oclay/timing/plan")
+async def oclay_timing_plan(
+    payload: dict[str, Any] = Body(default_factory=dict),
+    engine: MLBDataEngine = Depends(get_mlb_engine),
+) -> dict[str, Any]:
+    """Which games are due for a closing snapshot or a lineup-window rescan.
+
+    Pass an explicit ``games`` list (each with fixtureSlug + start time) or a
+    ``date`` to derive the slate from the MLB schedule. A scheduler polls this
+    every few minutes and acts on the returned windows.
+    """
+    games = payload.get("games")
+    if not isinstance(games, list) or not games:
+        slate_date = _date_from_body(payload) or date.today()
+        schedule = await _call_data_sources(engine.get_schedule, slate_date.isoformat())
+        games = games_from_mlb_schedule(schedule)
+    return build_timing_plan(games)
 
 
 @app.post("/oclay/learning/closing-snapshot")
@@ -2131,7 +2155,7 @@ def _clean_nullable_text(value: Any) -> str | None:
 
 
 def _compact_review_slip_result(result: dict[str, Any]) -> dict[str, Any]:
-    return {
+    compact = {
         "source": result.get("source"),
         "fixtureSlug": result.get("fixtureSlug"),
         "capturedAt": result.get("capturedAt"),
@@ -2150,6 +2174,11 @@ def _compact_review_slip_result(result: dict[str, Any]) -> dict[str, Any]:
             **(result.get("safety") or {}),
         },
     }
+    try:
+        compact["realQuoteCheck"] = real_quote_check_from_result(result)
+    except Exception as exc:  # noqa: BLE001 - never block the review response
+        compact["realQuoteCheck"] = {"status": "unavailable", "reason": str(exc)}
+    return compact
 
 
 def _compact_remove_sidebar_group_result(result: dict[str, Any]) -> dict[str, Any]:

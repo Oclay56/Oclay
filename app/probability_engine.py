@@ -59,6 +59,7 @@ _PROBABILITY_CEILING = 0.98
 
 _CALIBRATION_CACHE_SECONDS = 300.0
 _calibration_cache: dict[str, Any] = {"loadedAt": 0.0, "corrections": {}}
+_market_policy_cache: dict[str, Any] = {"loadedAt": 0.0, "policies": {}}
 
 
 def implied_probability(odds: Any) -> float | None:
@@ -310,9 +311,34 @@ def get_active_calibrations(*, force_reload: bool = False) -> dict[str, dict[str
     return dict(corrections)
 
 
+def get_active_market_policies(*, force_reload: bool = False) -> dict[str, dict[str, Any]]:
+    """Load per-market kill-switch policies from the ledger, cached.
+
+    Returns an empty mapping when no ledger or no policies exist, which leaves
+    every market enabled.
+    """
+    if os.getenv("OCLAY_DISABLE_MARKET_POLICY", "").strip().lower() in {"1", "true", "yes"}:
+        return {}
+    now = time.monotonic()
+    if not force_reload and now - _market_policy_cache["loadedAt"] < _CALIBRATION_CACHE_SECONDS:
+        return dict(_market_policy_cache["policies"])
+    policies: dict[str, dict[str, Any]] = {}
+    try:
+        from .pick_ledger import PickLedger
+
+        policies = PickLedger().load_market_policies()
+    except Exception:
+        policies = {}
+    _market_policy_cache["loadedAt"] = now
+    _market_policy_cache["policies"] = policies
+    return dict(policies)
+
+
 def invalidate_calibration_cache() -> None:
     _calibration_cache["loadedAt"] = 0.0
     _calibration_cache["corrections"] = {}
+    _market_policy_cache["loadedAt"] = 0.0
+    _market_policy_cache["policies"] = {}
 
 
 def _logit(probability: float) -> float:

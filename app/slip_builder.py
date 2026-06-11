@@ -5,6 +5,7 @@ from typing import Any
 
 from .correlation import slip_probability_and_ev
 from .mlb_props import slug_key
+from .slip_optimizer import build_ev_max_slip
 
 
 FINAL_STATUS_POINTS = {
@@ -87,6 +88,13 @@ def build_slip_candidate_response(
         and best_clean["legCount"] >= min_legs
     )
     best_clean["slipProbability"] = slip_probability_and_ev(best_clean.get("legs") or [])
+    if clean_mode == "ev_max":
+        best_clean["evMaxSlip"] = build_ev_max_slip(
+            clean,
+            min_legs=min_legs,
+            max_legs=max_legs,
+            max_product_odds=product_odds_cap,
+        )
 
     return {
         "purpose": "slip_candidate_builder",
@@ -311,6 +319,7 @@ def _clean_mode(value: str) -> str:
         "mega_under",
         "strict_diversity",
         "longshot",
+        "ev_max",
     } else "balanced"
 
 

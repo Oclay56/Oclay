@@ -51,15 +51,25 @@ _PITCHER_SUPPRESSION_MARKETS = {
     "outs_recorded",
 }
 
-# Latent correlation loadings used by the single-factor model. These are
-# deliberately conservative priors; once the ledger has graded co-occurring
-# legs they can be replaced with measured values.
-_RHO_SAME_PLAYER_SAME_FAMILY_SAME_DIR = 0.62
-_RHO_SAME_PLAYER_SAME_FAMILY_OPP_DIR = -0.55
-_RHO_SAME_PLAYER_CROSS_FAMILY = 0.20
-_RHO_SAME_TEAM_OFFENSE_SAME_DIR = 0.18
-_RHO_PITCHER_VS_OPP_HITTERS = 0.28
-_RHO_DEFAULT_SAME_GAME = 0.05
+# Latent correlation priors per pair category. These are deliberately
+# conservative; once the ledger has enough graded co-occurring legs, the
+# measured phi coefficient per category blends in (see correlation_calibration).
+_CATEGORY_PRIOR: dict[str, float] = {
+    "different_game": 0.0,
+    "same_player_same_family_same_dir": 0.62,
+    "same_player_same_family_opp_dir": -0.55,
+    "same_player_cross_family_same_dir": 0.20,
+    "same_player_cross_family_opp_dir": -0.20,
+    "pitcher_vs_hitter_aligned": 0.28,
+    "pitcher_vs_hitter_opposed": -0.28,
+    "same_team_offense_same_dir": 0.18,
+    "same_team_offense_opp_dir": -0.18,
+    "same_game_default_same_dir": 0.05,
+    "same_game_default_opp_dir": 0.0,
+}
+
+# Pseudo-pairs for shrinking a measured category correlation toward its prior.
+_CORRELATION_SHRINKAGE_PSEUDO_PAIRS = 40.0
 
 _MAX_EFFECTIVE_RHO = 0.95
 # Grid resolution for integrating over the common factor M ~ N(0, 1).
@@ -67,41 +77,75 @@ _FACTOR_GRID_POINTS = 200
 _FACTOR_GRID_LIMIT = 7.0
 
 
-def leg_pair_correlation(leg_a: dict[str, Any], leg_b: dict[str, Any]) -> float:
-    """Estimated latent correlation between two legs in (-1, 1).
+def leg_pair_category(leg_a: dict[str, Any], leg_b: dict[str, Any]) -> str:
+    """Classify a leg pair into a correlation category.
 
-    Legs in different games are treated as independent.
+    The same categories are used to look up the prior and to bucket measured
+    co-hit outcomes, so priors and measurements stay aligned.
     """
     if _fixture(leg_a) != _fixture(leg_b) or not _fixture(leg_a):
-        return 0.0
+        return "different_game"
 
     player_a, player_b = _player(leg_a), _player(leg_b)
     team_a, team_b = _team(leg_a), _team(leg_b)
     market_a, market_b = _market(leg_a), _market(leg_b)
     side_a, side_b = _side(leg_a), _side(leg_b)
-    same_dir = side_a == side_b
+    direction = "same_dir" if side_a == side_b else "opp_dir"
 
     if player_a and player_a == player_b:
         fam_a, fam_b = _family(market_a), _family(market_b)
         if fam_a == fam_b and fam_a is not None:
-            return _RHO_SAME_PLAYER_SAME_FAMILY_SAME_DIR if same_dir else _RHO_SAME_PLAYER_SAME_FAMILY_OPP_DIR
-        return _RHO_SAME_PLAYER_CROSS_FAMILY if same_dir else -_RHO_SAME_PLAYER_CROSS_FAMILY
+            return f"same_player_same_family_{direction}"
+        return f"same_player_cross_family_{direction}"
 
-    pitcher_link = _pitcher_vs_hitter_correlation(
+    pitcher_category = _pitcher_vs_hitter_category(
         market_a, side_a, team_a, market_b, side_b, team_b
     )
-    if pitcher_link is not None:
-        return pitcher_link
+    if pitcher_category is not None:
+        return pitcher_category
 
     if (
         team_a
         and team_a == team_b
-        and _family(market_a) in {"batter_volume"}
-        and _family(market_b) in {"batter_volume"}
+        and _family(market_a) == "batter_volume"
+        and _family(market_b) == "batter_volume"
     ):
-        return _RHO_SAME_TEAM_OFFENSE_SAME_DIR if same_dir else -_RHO_SAME_TEAM_OFFENSE_SAME_DIR
+        return f"same_team_offense_{direction}"
 
-    return _RHO_DEFAULT_SAME_GAME if same_dir else 0.0
+    return f"same_game_default_{direction}"
+
+
+def leg_pair_correlation(leg_a: dict[str, Any], leg_b: dict[str, Any]) -> float:
+    """Estimated latent correlation between two legs in (-1, 1).
+
+    Uses the category prior, blended toward the measured phi coefficient when
+    the ledger has enough graded pairs in that category. Legs in different
+    games are treated as independent.
+    """
+    category = leg_pair_category(leg_a, leg_b)
+    return correlation_for_category(category)
+
+
+def correlation_for_category(category: str) -> float:
+    prior = _CATEGORY_PRIOR.get(category, 0.0)
+    measured = _get_measured_estimates().get(category)
+    if not measured:
+        return prior
+    samples = float(measured.get("samples") or 0)
+    rho = measured.get("rho")
+    if rho is None or samples <= 0:
+        return prior
+    weight = samples / (samples + _CORRELATION_SHRINKAGE_PSEUDO_PAIRS)
+    return round((1.0 - weight) * prior + weight * float(rho), 4)
+
+
+def _get_measured_estimates() -> dict[str, dict[str, Any]]:
+    try:
+        from .correlation_calibration import get_active_correlation_estimates
+
+        return get_active_correlation_estimates()
+    except Exception:
+        return {}
 
 
 def slip_correlation_summary(legs: list[dict[str, Any]]) -> dict[str, Any]:
@@ -245,14 +289,14 @@ def _single_factor_joint_probability(probs: list[float], rho: float) -> float:
     return max(0.0, min(1.0, total / density_sum))
 
 
-def _pitcher_vs_hitter_correlation(
+def _pitcher_vs_hitter_category(
     market_a: str,
     side_a: str,
     team_a: str,
     market_b: str,
     side_b: str,
     team_b: str,
-) -> float | None:
+) -> str | None:
     a_is_pitcher = market_a in _PITCHER_SUPPRESSION_MARKETS
     b_is_pitcher = market_b in _PITCHER_SUPPRESSION_MARKETS
     if a_is_pitcher == b_is_pitcher:
@@ -275,7 +319,7 @@ def _pitcher_vs_hitter_correlation(
     aligned = (pitcher_dominant and hitter_side == "under") or (
         not pitcher_dominant and hitter_side == "over"
     )
-    return _RHO_PITCHER_VS_OPP_HITTERS if aligned else -_RHO_PITCHER_VS_OPP_HITTERS
+    return "pitcher_vs_hitter_aligned" if aligned else "pitcher_vs_hitter_opposed"
 
 
 def _family(market_key: str) -> str | None:

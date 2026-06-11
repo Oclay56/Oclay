@@ -37,6 +37,11 @@ Never reverse this order. Do not invent lines, odds, players, markets, row IDs, 
 - `dataQuality`: `low`, `medium`, `high`; gates trust in the edge.
 - `correlationPenalty` / `correlationContext`: tax and reason when a leg is redundant with a stronger correlated leg in the same game.
 - `slipProjections.perGame`, `slipProbability`: group-level `estimatedWinProbability`, `expectedValue`, and `correlationLift` from a correlation-aware model.
+- `slipProjections.evMaxByGame`: the expected-value-maximizing leg subset per game, with the `evCurve` showing where EV peaked.
+- `lineCurve` / `lineCurveContest.valueLeaders`: the highest-EV line/side within a player-market; dominated lines are deprioritized.
+- `marketPolicy.killedMarkets`: markets excluded for negative realized ROI over graded picks; rows may be tagged `market_downweighted_negative_realized_edge`.
+- `meanAdjustments`: handedness, Log5 strikeout, and park-factor sharpening applied to the per-game mean before the probability.
+- `realQuoteCheck` (review-slip result): `realExpectedValue` and `correlationRepricingGap` versus Stake's actual combined SGM quote — the most authoritative EV read.
 
 ## Market Contest
 

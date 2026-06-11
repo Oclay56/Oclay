@@ -8,12 +8,15 @@ from .correlation import leg_correlation_penalty, slip_probability_and_ev
 from .decision_profiles import evidence_check, evidence_windows, season_evidence, trend_labels
 from .mlb_bridge import enrich_props_with_mlb_data, stat_mapping_for_market
 from .market_normalization import normalize_mlb_prop_market_key
+from .matchup_model import sharpen_mean
 from .mlb_props import slug_key
 from .probability_engine import (
     devig_two_way,
     estimate_side_probability,
     get_active_calibrations,
+    get_active_market_policies,
 )
+from .slip_optimizer import build_ev_max_slip
 from .stake_sgm_browser import (
     SGM_BOARD_FRESH_SECONDS,
     make_sgm_selection_row_id,
@@ -289,6 +292,8 @@ async def build_sgm_candidate_pool_from_boards(
     enriched_by_id = {str(prop.get("propId") or ""): prop for prop in enriched.get("props") or []}
     scored_rows = []
     rejected = Counter(initial_rejections)
+    market_policies = get_active_market_policies()
+    killed_markets: set[str] = set()
 
     for row in flat_rows:
         enriched_prop = enriched_by_id.get(str(row.get("propId") or "")) or {}
@@ -298,7 +303,11 @@ async def build_sgm_candidate_pool_from_boards(
             mode=clean_mode,
         )
         candidate.update(score)
-        if candidate["score"] < clean_quality_floor:
+        _apply_market_policy(candidate, market_policies, killed_markets)
+        if candidate.get("marketPolicyStatus") == "exclude":
+            candidate["rejectionReason"] = "market_killed_negative_realized_edge"
+            rejected["market_killed_negative_realized_edge"] += 1
+        elif candidate["score"] < clean_quality_floor:
             candidate["rejectionReason"] = "score_below_quality_floor"
             rejected["score_below_quality_floor"] += 1
         elif not candidate.get("rowId"):
@@ -310,7 +319,11 @@ async def build_sgm_candidate_pool_from_boards(
         else:
             scored_rows.append(candidate)
 
+    line_curve_contest = _apply_line_curve_contest(scored_rows)
     correlation_adjustments = _apply_correlation_penalties(scored_rows)
+    downweighted_rows = sum(
+        1 for row in scored_rows if row.get("marketPolicyStatus") == "downweight"
+    )
     market_contest = _apply_within_player_market_contest(scored_rows)
     game_contest = _apply_game_level_contest(
         scored_rows,
@@ -377,10 +390,28 @@ async def build_sgm_candidate_pool_from_boards(
             "marketContestGroups": market_contest["playerGroups"],
             "contestedPlayerGroups": market_contest["contestedPlayerGroups"],
             "correlationTaxedRows": correlation_adjustments,
+            "lineCurveContestGroups": line_curve_contest["contestedGroups"],
         },
         "rankedCandidates": ranked,
         "perGame": per_game,
         "slipProjections": _slate_slip_projections(ranked),
+        "lineCurveContest": {
+            "contestedGroups": line_curve_contest["contestedGroups"],
+            "valueLeaders": line_curve_contest["valueLeaders"][:15],
+            "note": (
+                "Within each player-market the highest-EV line/side is the value "
+                "leader; inferior lines on the same player-market are deprioritized."
+            ),
+        },
+        "marketPolicy": {
+            "killedMarkets": sorted(killed_markets),
+            "downweightedRows": downweighted_rows,
+            "active": bool(market_policies),
+            "note": (
+                "Markets whose model edge has not paid off over enough graded picks "
+                "are excluded or downweighted from realized ledger results."
+            ),
+        },
         "rejectedSummary": dict(sorted(rejected.items())),
         "marketExposure": dict(Counter(row["normalizedMarketKey"] for row in ranked)),
         "marketConcentration": market_concentration,
@@ -633,6 +664,13 @@ def _probability_assessment(
     context = candidate.get("context") or {}
     season = context.get("season") or candidate.get("season") or {}
     season_mean = _float_or_none(season.get("average"))
+    market_dash = str(candidate.get("normalizedMarketKey") or "").replace("_", "-")
+    sharpened = (
+        sharpen_mean(season_mean, market_key=market_dash, candidate=candidate)
+        if season_mean is not None
+        else None
+    )
+    effective_mean = sharpened["mean"] if sharpened else season_mean
     season_rate, season_source = _season_probability_rate(season, candidate.get("line"), side)
     recent_rate, recent_source, recent_games = _recent_probability_rate(context, side)
     matchup = _matchup_factor(candidate, side)
@@ -654,12 +692,11 @@ def _probability_assessment(
         scoring_risk_flags=scoring_risk_flags,
     )
 
-    market_dash = str(candidate.get("normalizedMarketKey") or "").replace("_", "-")
     market_underscore = market_dash.replace("-", "_")
     active_calibrations = get_active_calibrations()
     calibration = active_calibrations.get(market_underscore) or active_calibrations.get(market_dash)
     estimate = estimate_side_probability(
-        season_mean=season_mean,
+        season_mean=effective_mean,
         line=candidate.get("line"),
         side=side,
         market_key=market_dash,
@@ -712,6 +749,8 @@ def _probability_assessment(
         "dataQuality": data_quality,
         "inputs": {
             "seasonMeanPerGame": season_mean,
+            "sharpenedMeanPerGame": effective_mean if sharpened else None,
+            "meanAdjustments": (sharpened or {}).get("adjustments") or [],
             "distributionalSeasonProbability": distributional.get("winProbability"),
             "distribution": distributional.get("distribution"),
             "dispersion": distributional.get("dispersion"),
@@ -1328,6 +1367,113 @@ def _ranked_candidate_sort_key(row: dict[str, Any]) -> tuple[int, int, float, st
     return (0 if game_selected else 1, 0 if contest_rank <= 1 else 1, -score, row_id)
 
 
+def _apply_market_policy(
+    candidate: dict[str, Any],
+    market_policies: dict[str, dict[str, Any]],
+    killed_markets: set[str],
+) -> None:
+    """Apply the realized-edge kill-switch to a scored candidate."""
+    market = str(candidate.get("normalizedMarketKey") or "").replace("-", "_")
+    policy = market_policies.get(market) or market_policies.get(market.replace("_", "-"))
+    if not policy:
+        return
+    status = str(policy.get("status") or "")
+    candidate["marketPolicyStatus"] = status
+    candidate["marketPolicy"] = {
+        "status": status,
+        "realizedRoi": policy.get("realizedRoi"),
+        "samples": policy.get("samples"),
+    }
+    if status == "exclude":
+        killed_markets.add(market)
+        tags = set(candidate.get("reasonTags") or [])
+        tags.add("market_killed_negative_realized_edge")
+        candidate["reasonTags"] = sorted(tags)
+    elif status == "downweight":
+        base = _float_or_none(candidate.get("score")) or 0.0
+        candidate["score"] = round(max(0.0, base - 8.0), 2)
+        tags = set(candidate.get("reasonTags") or [])
+        tags.add("market_downweighted_negative_realized_edge")
+        candidate["reasonTags"] = sorted(tags)
+
+
+def leg_expected_value(candidate: dict[str, Any]) -> float | None:
+    """EV per 1 unit staked using the calibrated model probability and odds."""
+    probability = candidate.get("probabilityAssessment") or {}
+    win = _float_or_none(probability.get("estimatedProbability"))
+    odds = _float_or_none(candidate.get("odds"))
+    if win is None or odds is None or odds <= 1.0:
+        return None
+    return round(win * (odds - 1.0) - (1.0 - win), 4)
+
+
+def _apply_line_curve_contest(scored_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Shop every available line/side on a player-market for the most mispriced one.
+
+    Books are rarely wrong about a player; they are wrong about a specific
+    line. Within each (game, player, market) the highest-EV line/side is the
+    value leader, and a clearly inferior line on the same player-market is
+    deprioritized so the pool surfaces the right point on the curve.
+    """
+    groups: defaultdict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in scored_rows:
+        key = (
+            str(row.get("fixtureSlug") or ""),
+            slug_key(row.get("player")),
+            str(row.get("normalizedMarketKey") or ""),
+        )
+        groups[key].append(row)
+
+    contested = 0
+    leaders: list[dict[str, Any]] = []
+    for rows in groups.values():
+        priced = [(row, leg_expected_value(row)) for row in rows]
+        priced = [(row, ev) for row, ev in priced if ev is not None]
+        if len(priced) < 2:
+            for row in rows:
+                row["lineCurve"] = {
+                    "alternativesPriced": len(priced),
+                    "ev": leg_expected_value(row),
+                    "isValueLeader": True,
+                }
+            continue
+        contested += 1
+        best_row, best_ev = max(priced, key=lambda item: item[1])
+        for row, ev in priced:
+            is_leader = row is best_row
+            row["lineCurve"] = {
+                "alternativesPriced": len(priced),
+                "ev": ev,
+                "bestEv": round(best_ev, 4),
+                "bestLine": best_row.get("line"),
+                "bestSide": best_row.get("side"),
+                "bestOdds": best_row.get("odds"),
+                "evGapToBest": round(best_ev - ev, 4),
+                "isValueLeader": is_leader,
+            }
+            tags = set(row.get("reasonTags") or [])
+            if is_leader:
+                tags.add("line_curve_value_leader")
+            elif best_ev - ev > 0.05:
+                tags.add("line_curve_dominated_by_better_line")
+                row["score"] = round(max(0.0, (_float_or_none(row.get("score")) or 0.0) - 4.0), 2)
+            row["reasonTags"] = sorted(tags)
+        leaders.append(
+            {
+                "fixtureSlug": best_row.get("fixtureSlug"),
+                "player": best_row.get("player"),
+                "market": best_row.get("normalizedMarketKey"),
+                "line": best_row.get("line"),
+                "side": best_row.get("side"),
+                "odds": best_row.get("odds"),
+                "expectedValue": round(best_ev, 4),
+                "alternativesPriced": len(priced),
+            }
+        )
+    leaders.sort(key=lambda item: item["expectedValue"], reverse=True)
+    return {"contestedGroups": contested, "valueLeaders": leaders}
+
+
 def _apply_within_player_market_contest(rows: list[dict[str, Any]]) -> dict[str, Any]:
     groups: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -1788,12 +1934,38 @@ def _slate_slip_projections(ranked: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "perGame": projections,
         "positiveExpectedValueGames": sorted(positive_ev),
+        "evMaxByGame": _ev_max_slips_by_game(by_game),
         "note": (
             "Estimated win probability uses a single-factor Gaussian copula over "
             "calibrated leg probabilities; expected value is per 1 unit staked and "
             "is not a final Stake SGM quote."
         ),
     }
+
+
+def _ev_max_slips_by_game(by_game: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
+    """The EV-maximizing leg subset per game (same-game parlay)."""
+    out: dict[str, Any] = {}
+    for fixture, legs in sorted(by_game.items()):
+        if len(legs) < GAME_CONTEST_MIN_LEGS:
+            continue
+        optimal = build_ev_max_slip(
+            legs,
+            min_legs=GAME_CONTEST_MIN_LEGS,
+            max_legs=DEFAULT_MAX_LEGS_PER_GAME_GROUP,
+        )
+        if not optimal.get("meetsMinimumLegs"):
+            continue
+        out[fixture] = {
+            "legCount": optimal["legCount"],
+            "rowIds": [leg.get("rowId") for leg in optimal["legs"]],
+            "expectedValue": optimal["expectedValue"],
+            "estimatedWinProbability": optimal["estimatedWinProbability"],
+            "rawProductOdds": optimal["rawProductOdds"],
+            "stoppedReason": optimal["stoppedReason"],
+            "evCurve": optimal["evCurve"],
+        }
+    return out
 
 
 def _slip_projection_for_legs(legs: list[dict[str, Any]]) -> dict[str, Any]:

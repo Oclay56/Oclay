@@ -353,6 +353,115 @@ class PickLedger:
             for row in rows
         }
 
+    def save_market_policies(self, policies: dict[str, dict[str, Any]]) -> int:
+        now = _utc_now()
+        actionable = {
+            market: policy
+            for market, policy in policies.items()
+            if policy.get("status") in {"exclude", "downweight", "ok"}
+        }
+        with self._connect() as conn:
+            for market_key, policy in actionable.items():
+                conn.execute(
+                    """
+                    INSERT INTO market_policy (
+                        market_key, status, samples, realized_roi, hit_rate, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(market_key) DO UPDATE SET
+                        status = excluded.status,
+                        samples = excluded.samples,
+                        realized_roi = excluded.realized_roi,
+                        hit_rate = excluded.hit_rate,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        market_key,
+                        policy.get("status"),
+                        _int_or_none(policy.get("samples")),
+                        _float_or_none(policy.get("realizedRoi")),
+                        _float_or_none(policy.get("hitRate")),
+                        now,
+                    ),
+                )
+            conn.commit()
+        return len(actionable)
+
+    def load_market_policies(self) -> dict[str, dict[str, Any]]:
+        with self._connect() as conn:
+            try:
+                rows = conn.execute("SELECT * FROM market_policy").fetchall()
+            except sqlite3.OperationalError:
+                return {}
+        return {
+            str(row["market_key"]): {
+                "status": row["status"],
+                "samples": row["samples"],
+                "realizedRoi": row["realized_roi"],
+                "hitRate": row["hit_rate"],
+            }
+            for row in rows
+        }
+
+    def graded_legs_by_game(self) -> list[list[dict[str, Any]]]:
+        """Graded legs grouped by game, for measuring same-game co-hit rates."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT slate_date, fixture_slug, player, team, market_key, side, outcome
+                FROM picks
+                WHERE outcome IN (?, ?) AND fixture_slug IS NOT NULL AND fixture_slug != ''
+                """,
+                (GRADE_WIN, GRADE_LOSS),
+            ).fetchall()
+        games: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for row in rows:
+            key = (str(row["slate_date"] or ""), str(row["fixture_slug"] or ""))
+            games.setdefault(key, []).append(
+                {
+                    "fixtureSlug": row["fixture_slug"],
+                    "player": row["player"],
+                    "team": row["team"],
+                    "normalizedMarketKey": row["market_key"],
+                    "side": row["side"],
+                    "win": 1 if row["outcome"] == GRADE_WIN else 0,
+                }
+            )
+        return [legs for legs in games.values() if len(legs) >= 2]
+
+    def save_correlation_estimates(self, estimates: dict[str, dict[str, Any]]) -> int:
+        now = _utc_now()
+        with self._connect() as conn:
+            for category, estimate in estimates.items():
+                conn.execute(
+                    """
+                    INSERT INTO correlation_estimates (category, rho, samples, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(category) DO UPDATE SET
+                        rho = excluded.rho,
+                        samples = excluded.samples,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        category,
+                        _float_or_none(estimate.get("rho")),
+                        _int_or_none(estimate.get("samples")),
+                        now,
+                    ),
+                )
+            conn.commit()
+        return len(estimates)
+
+    def load_correlation_estimates(self) -> dict[str, dict[str, Any]]:
+        with self._connect() as conn:
+            try:
+                rows = conn.execute("SELECT * FROM correlation_estimates").fetchall()
+            except sqlite3.OperationalError:
+                return {}
+        return {
+            str(row["category"]): {"rho": row["rho"], "samples": row["samples"]}
+            for row in rows
+        }
+
     def summary(self) -> dict[str, Any]:
         with self._connect() as conn:
             total = conn.execute("SELECT COUNT(*) AS c FROM picks").fetchone()["c"]
@@ -451,6 +560,22 @@ class PickLedger:
                     samples INTEGER,
                     brier REAL,
                     fitted_at TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS market_policy (
+                    market_key TEXT PRIMARY KEY,
+                    status TEXT,
+                    samples INTEGER,
+                    realized_roi REAL,
+                    hit_rate REAL,
+                    updated_at TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS correlation_estimates (
+                    category TEXT PRIMARY KEY,
+                    rho REAL,
+                    samples INTEGER,
+                    updated_at TEXT
                 );
                 """
             )
