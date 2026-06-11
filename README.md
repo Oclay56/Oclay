@@ -1,6 +1,6 @@
 # OCLAY
 
-Oclay is an AI-led MLB review-slip system built on the Stake-GPT core. It reads the live Stake same-game-multi board, enriches every available row with real MLB Stats API context, scores each candidate leg on a genuine probability model, and hands a ranked, row-ID-validated, review-only candidate pool to a Custom GPT that assembles slips for a human to approve.
+Oclay is an AI-led MLB review-slip system. It reads the live Stake same-game-multi board, enriches every available row with real MLB Stats API context, scores each candidate leg on a genuine probability model, and hands a ranked, row-ID-validated, review-only candidate pool to a Custom GPT that assembles slips for a human to approve.
 
 What makes this build different from a static heuristic: **OCLAY measures whether its own picks are right and corrects itself.** Every scored row is recorded, graded against the next morning's box score, and fed back into per-market calibration. The scoring constants are no longer guesses — they become measurable and self-tuning.
 
