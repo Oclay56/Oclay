@@ -981,7 +981,7 @@ async def mlb_stake_ui_sgm_candidate_pool(
         minimum=1,
         maximum=180,
     )
-    compact = _bool_from_body(payload, "compact", "compact", False)
+    compact = _bool_from_body(payload, "compact", "compact", True)
     max_games = _clean_int_from_body(payload, "maxGames", 15, minimum=1, maximum=20)
     fixture_slugs = _string_list_from_body(payload, "fixtureSlugs", "fixture_slugs")[:max_games]
     matchups = _string_list_from_body(payload, "matchups", "matchup")
@@ -1090,14 +1090,14 @@ async def mlb_stake_ui_sgm_candidate_pool(
         max_candidates_per_game=_clean_int_from_body(
             payload,
             "maxCandidatesPerGame",
-            8,
+            14,
             minimum=2,
             maximum=16,
         ),
         max_total_candidates=_clean_int_from_body(
             payload,
             "maxTotalCandidates",
-            75,
+            150,
             minimum=1,
             maximum=300,
         ),

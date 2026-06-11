@@ -29,8 +29,8 @@ DEFAULT_MAX_LEGS_PER_GAME_GROUP = 16
 DEFAULT_MAX_SGM_GROUP_ODDS = 501.0
 NORMAL_SLATE_GAME_CAP = 15
 HARD_SLATE_GAME_CAP = 20
-DEFAULT_MAX_CANDIDATES_PER_GAME = 8
-DEFAULT_MAX_TOTAL_CANDIDATES = 75
+DEFAULT_MAX_CANDIDATES_PER_GAME = 14
+DEFAULT_MAX_TOTAL_CANDIDATES = 150
 COMPACT_REASON_TAG_LIMIT = 3
 MARKET_CONTEST_ALTERNATIVE_LIMIT = 3
 MARKET_CONTEST_REJECTED_LIMIT = 12
@@ -428,6 +428,21 @@ async def build_sgm_candidate_pool_from_boards(
                 "Every returned candidate has loaded MLB stat data; rows whose stats "
                 "could not be pulled are excluded as insufficient_researched_data, "
                 "never surfaced as picks."
+            ),
+        },
+        "fullSlateComparison": {
+            "comparedRows": len(scored_rows),
+            "returnedRows": len(ranked),
+            "rankingComputedOverEntireBoard": True,
+            "perPlayerMarketContest": True,
+            "lineCurveContest": True,
+            "returnedAreTopRanked": True,
+            "note": (
+                "Every player and bet type on the board was scored and compared "
+                "(within-player market contest + line-curve + game contest) before "
+                "ranking. Returned rows are the top-ranked of that full comparison; "
+                "lower-ranked rows were compared, not skipped. Raise maxCandidatesPerGame "
+                "or maxTotalCandidates to surface deeper into the ranked set."
             ),
         },
         "marketExposure": dict(Counter(row["normalizedMarketKey"] for row in ranked)),

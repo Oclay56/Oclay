@@ -780,6 +780,7 @@ def test_stake_ui_sgm_candidate_pool_returns_ranked_support_rows():
                 "side": "under",
                 "markets": "singles",
                 "qualityFloor": 50,
+                "compact": False,
                 "timeoutSeconds": 45,
             },
         )
@@ -793,6 +794,7 @@ def test_stake_ui_sgm_candidate_pool_returns_ranked_support_rows():
     assert result["rankedCandidates"][0]["rowId"].startswith("sgm_")
     assert result["rankedCandidates"][0]["normalizedMarketKey"] == "singles"
     assert result["rankedCandidates"][0]["mlbPersonId"] == 1001
+    assert result["fullSlateComparison"]["rankingComputedOverEntireBoard"] is True
     assert fake_store.created_jobs[0]["jobType"] == "stake_ui_sgm_board_batch"
 
 
