@@ -98,6 +98,7 @@ class TuiAction:
 TUI_ACTIONS: tuple[TuiAction, ...] = (
     TuiAction("review", "Review", "ctrl+r", "Review the visible Stake board.", "review", "Reviewing"),
     TuiAction("build", "Build", "ctrl+b", "Open builder mode for validated slips.", "build", "Building"),
+    TuiAction("trainer", "Trainer", "ctrl+t", "Grade settled picks and recalibrate the model.", "trainer", "Training"),
     TuiAction("clean", "Clean", "ctrl+c", "Clear rebuildable cache.", "clean", "Cleaning"),
     TuiAction("domain", "Domain", "ctrl+q", "Toggle Stake domain profile.", "domain", "Switching domain"),
     TuiAction("rgb", "RGB", "ctrl+g", "Tune TUI background colors.", "rgb", "RGB"),
@@ -826,6 +827,7 @@ if TEXTUAL_AVAILABLE:
         BINDINGS = [
             ("ctrl+r", "run_action('review')", "Review"),
             ("ctrl+b", "run_action('build')", "Build"),
+            ("ctrl+t", "run_action('trainer')", "Trainer"),
             ("ctrl+c", "run_action('clean')", "Clean"),
             ("ctrl+q", "run_action('domain')", "Domain"),
             ("ctrl+g", "run_action('rgb')", "RGB"),
@@ -833,6 +835,7 @@ if TEXTUAL_AVAILABLE:
             ("ctrl+e", "run_action('exit')", "Exit"),
             ("r", "run_action('review')", "Review"),
             ("b", "run_action('build')", "Build"),
+            ("t", "run_action('trainer')", "Trainer"),
             ("c", "run_action('clean')", "Clean"),
             ("q", "run_action('domain')", "Domain"),
             ("g", "run_action('rgb')", "RGB"),
@@ -982,7 +985,7 @@ if TEXTUAL_AVAILABLE:
             if self._setup_state == "stopping":
                 return "stopping"
             cli_status = str(self.cli.status or "ready").strip().lower()
-            if cli_status in {"building", "reviewing", "cleaning cache", "analyzing"}:
+            if cli_status in {"building", "reviewing", "cleaning cache", "analyzing", "training"}:
                 return cli_status
             if self._busy and self._active_action is not None:
                 return self._active_action.running_label.lower()
@@ -1355,6 +1358,10 @@ if TEXTUAL_AVAILABLE:
                 self.cli.start_helper("review")
             elif action.action_id == "build":
                 self.cli.start_helper("build")
+            elif action.action_id == "trainer":
+                self.cli.status = "training"
+                code = self._run_module_command(["-m", "app.learning_cli", "loop"])
+                self.cli.status = "ready" if code == 0 else "training failed"
             elif action.action_id == "clean":
                 self.cli.status = "cleaning cache"
                 code = self._run_module_command(["-m", "app.supabase_cache", "--root-dir", str(self.root_dir)])

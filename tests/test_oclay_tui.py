@@ -34,6 +34,7 @@ def test_oclay_tui_exposes_rgb_action_not_palette():
     assert [action.action_id for action in actions] == [
         "review",
         "build",
+        "trainer",
         "clean",
         "domain",
         "rgb",
@@ -42,6 +43,10 @@ def test_oclay_tui_exposes_rgb_action_not_palette():
     ]
     assert [action.label for action in actions if action.action_id == "rgb"] == ["RGB"]
     assert [action.shortcut for action in actions if action.action_id == "rgb"] == ["ctrl+g"]
+    trainer = next(action for action in actions if action.action_id == "trainer")
+    assert trainer.label == "Trainer"
+    assert trainer.shortcut == "ctrl+t"
+    assert trainer.command == "trainer"
     assert all(action.label != "Palette" for action in actions)
     assert all("Historic" not in action.label for action in actions)
     assert all("M/L" not in action.label for action in actions)
