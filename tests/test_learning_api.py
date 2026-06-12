@@ -46,6 +46,63 @@ def _record_a_pick(ledger: PickLedger):
     )
 
 
+def test_record_slip_endpoint_logs_chosen_legs(tmp_path):
+    ledger = PickLedger(db_path=tmp_path / "ledger.sqlite")
+
+    chosen = {
+        "date": SLATE,
+        "mode": "best_available",
+        "rawProductOdds": 3.24,
+        "slipProbability": {"estimatedWinProbability": 0.41, "expectedValue": 0.12},
+        "legs": [
+            {
+                "fixtureSlug": "reds-astros",
+                "rowId": "row-1",
+                "player": "Player 101",
+                "team": "Astros",
+                "normalizedMarketKey": "hits",
+                "side": "over",
+                "line": 0.5,
+                "odds": 1.8,
+                "probabilityAssessment": {"estimatedProbability": 0.62, "edge": 0.08},
+            },
+            {
+                "fixtureSlug": "reds-astros",
+                "rowId": "row-2",
+                "player": "Player 202",
+                "team": "Reds",
+                "normalizedMarketKey": "total_bases",
+                "side": "under",
+                "line": 1.5,
+                "odds": 1.8,
+                "probabilityAssessment": {"estimatedProbability": 0.58, "edge": 0.05},
+            },
+        ],
+    }
+
+    app.dependency_overrides[get_pick_ledger] = lambda: ledger
+    try:
+        with TestClient(app) as client:
+            recorded = client.post("/oclay/learning/record-slip", json=chosen)
+            missing = client.post("/oclay/learning/record-slip", json={"date": SLATE})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert recorded.status_code == 200
+    body = recorded.json()
+    assert body["recorded"] is True
+    assert body["reviewOnly"] is True
+    assert body["legsRecorded"] == 2
+
+    # Both legs land as pending picks ready for grading, plus one slip row.
+    summary = ledger.summary()
+    assert summary["pendingPicks"] == 2
+    assert summary["slips"] == 1
+
+    # A body with no legs is a clean 422, not a crash.
+    assert missing.status_code == 422
+
+
 def test_learning_endpoints_grade_and_report(tmp_path):
     ledger = PickLedger(db_path=tmp_path / "ledger.sqlite")
     _record_a_pick(ledger)

@@ -1682,6 +1682,50 @@ async def oclay_timing_plan(
     return build_timing_plan(games)
 
 
+@app.post("/oclay/learning/record-slip")
+async def oclay_learning_record_slip(
+    payload: dict[str, Any] = Body(default_factory=dict),
+    ledger: PickLedger = Depends(get_pick_ledger),
+) -> dict[str, Any]:
+    """Log the slip the user chose to bet so it self-grades and calibrates.
+
+    The GPT passes the exact ranked-candidate legs it finalized. Each leg is
+    stored as a pending pick (carrying its model probability) and the slip is
+    stored for slip-level settlement; later grading settles both against the
+    MLB box score. Review-only: this records intent, it never places a bet.
+    """
+    slip = payload.get("slip") if isinstance(payload.get("slip"), dict) else payload
+    legs = slip.get("legs")
+    if not isinstance(legs, list) or not legs:
+        raise HTTPException(
+            status_code=422,
+            detail="legs must be a non-empty list of the chosen candidate rows.",
+        )
+    slate_date = _date_from_body(payload)
+    mode = str(payload.get("mode") or slip.get("mode") or "best_available")
+    try:
+        result = ledger.record_slip(
+            slip,
+            slate_date=slate_date.isoformat() if slate_date else None,
+            mode=mode,
+        )
+    except Exception as exc:  # noqa: BLE001 - surface a clean error, never a stack trace
+        raise HTTPException(
+            status_code=500,
+            detail={"source": "ledger", "message": f"Could not record slip: {exc}"},
+        ) from exc
+    return {
+        "purpose": "oclay_record_slip",
+        "recorded": True,
+        "reviewOnly": True,
+        "note": (
+            "Slip logged. Run grade after the games finish to settle it; "
+            "calibration then learns from the result."
+        ),
+        **result,
+    }
+
+
 @app.post("/oclay/learning/closing-snapshot")
 async def oclay_learning_closing_snapshot(
     payload: dict[str, Any] = Body(default_factory=dict),

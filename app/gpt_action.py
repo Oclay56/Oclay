@@ -366,6 +366,20 @@ def build_gpt_action_openapi_schema(server_url: str) -> dict[str, Any]:
                     request_body=_selection_request_body(),
                 )
             },
+            "/oclay/learning/record-slip": {
+                "post": _operation(
+                    "recordSlip",
+                    "Log the chosen slip to the OCLAY tracking ledger",
+                    (
+                        "Records the legs the user decided to bet so they grade "
+                        "themselves against MLB box scores later and feed calibration. "
+                        "Pass the exact ranked-candidate objects that were chosen. "
+                        "Review-only: this logs the pick, it never places a bet. Only "
+                        "call this after the user confirms they want the slip logged."
+                    ),
+                    request_body=_record_slip_request_body(),
+                )
+            },
         },
     }
     return schema
@@ -2855,6 +2869,56 @@ def _stake_ui_exact_selection_schema() -> dict[str, Any]:
             "and odds from getStakeUiSgmBoard."
         ),
         "additionalProperties": True,
+    }
+
+
+def _record_slip_request_body() -> dict[str, Any]:
+    return {
+        "required": True,
+        "content": {
+            "application/json": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "date": {
+                            "type": "string",
+                            "format": "date",
+                            "description": "Slate date the slip belongs to (YYYY-MM-DD).",
+                        },
+                        "mode": {
+                            "type": "string",
+                            "description": "Build mode the slip came from, e.g. best_available.",
+                        },
+                        "rawProductOdds": {
+                            "type": "number",
+                            "description": "Naive product of the leg odds, if known.",
+                        },
+                        "slipProbability": {
+                            "type": "object",
+                            "description": "Group-level model read for the slip.",
+                            "properties": {
+                                "estimatedWinProbability": {"type": "number"},
+                                "expectedValue": {"type": "number"},
+                            },
+                            "additionalProperties": True,
+                        },
+                        "legs": {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": 20,
+                            "description": (
+                                "The exact ranked-candidate objects the user chose, passed "
+                                "through verbatim (with rowId, player, market, side, line, odds, "
+                                "and probabilityAssessment) so each leg can grade and calibrate."
+                            ),
+                            "items": {"type": "object", "additionalProperties": True},
+                        },
+                    },
+                    "required": ["legs"],
+                    "additionalProperties": True,
+                }
+            }
+        },
     }
 
 

@@ -97,7 +97,9 @@ For line-sensitive work, refresh stale Stake board data. After lineup, injury, p
 
 ## Self-Correcting Backend (Context Only)
 
-The backend records every scored row, grades it later against official MLB box scores, and refits per-market calibration that sharpens future `estimatedProbability` values. This loop runs on the backend and is not something the GPT triggers or imports. The GPT simply reads the already-calibrated probabilities. Until enough graded history exists, estimates lean on reasoned priors, so keep treating them as support, not certainty.
+The backend records every scored row, grades it later against official MLB box scores, and refits per-market calibration that sharpens future `estimatedProbability` values. Grading and calibration run on the backend's own schedule and are not something the GPT triggers or imports. The GPT simply reads the already-calibrated probabilities. Until enough graded history exists, estimates lean on reasoned priors, so keep treating them as support, not certainty.
+
+The one learning action the GPT may take is `recordSlip`: after the user confirms a finalized slip, the GPT can log the chosen legs so they self-grade later. This only records the pick (review-only bookkeeping, never a wager) and only with the user's go-ahead. The GPT never runs grading or calibration itself.
 
 ## Safety
 
