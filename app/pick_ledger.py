@@ -16,6 +16,7 @@ then updated in place when graded.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -89,8 +90,10 @@ class PickLedger:
         run_id: str | None = None,
     ) -> dict[str, Any]:
         """Persist an assembled slip and its legs for slip-level scoring."""
-        slip_id = str(slip.get("slipId") or _new_id("slip"))
         legs = [leg for leg in (slip.get("legs") or []) if isinstance(leg, dict)]
+        # A content-based id (when the caller gives none) means logging the same
+        # slip twice updates the one row instead of duplicating it.
+        slip_id = str(slip.get("slipId") or _content_slip_id(slate_date, legs))
         namespace = str(slate_date) if slate_date else (run_id or slip_id)
         now = _utc_now()
         with self._connect() as conn:
@@ -854,6 +857,25 @@ def _pick_key(row: dict[str, Any], run_id: str) -> str:
         )
     )
     return f"{run_id}:{base}"
+
+
+def _content_slip_id(slate_date: str | None, legs: list[dict[str, Any]]) -> str:
+    """Deterministic slip id from the slate date + the slip's legs.
+
+    Identical slips logged twice map to the same id, so the second log updates
+    the existing row rather than creating a duplicate. Falls back to a random
+    id only when there are no legs to hash.
+    """
+    if not legs:
+        return _new_id("slip")
+    signature = "|".join(
+        sorted(
+            f"{leg.get('player')}:{_market_key(leg)}:{leg.get('side')}:{_float_or_none(leg.get('line'))}"
+            for leg in legs
+        )
+    )
+    digest = hashlib.sha1(f"{slate_date}:{signature}".encode("utf-8")).hexdigest()[:16]
+    return f"slip_{digest}"
 
 
 def _market_key(row: dict[str, Any]) -> str | None:

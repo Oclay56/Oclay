@@ -103,6 +103,35 @@ def test_record_slip_endpoint_logs_chosen_legs(tmp_path):
     assert missing.status_code == 422
 
 
+def test_record_slip_is_idempotent_on_duplicate_log(tmp_path):
+    ledger = PickLedger(db_path=tmp_path / "ledger.sqlite")
+
+    slip = {
+        "date": SLATE,
+        "legs": [
+            {"rowId": "row-1", "player": "Player 101", "normalizedMarketKey": "hits",
+             "side": "over", "line": 0.5, "odds": 1.8},
+            {"rowId": "row-2", "player": "Player 202", "normalizedMarketKey": "total_bases",
+             "side": "under", "line": 1.5, "odds": 1.9},
+        ],
+    }
+
+    app.dependency_overrides[get_pick_ledger] = lambda: ledger
+    try:
+        with TestClient(app) as client:
+            first = client.post("/oclay/learning/record-slip", json=slip)
+            second = client.post("/oclay/learning/record-slip", json=slip)
+    finally:
+        app.dependency_overrides.clear()
+
+    assert first.status_code == 200 and second.status_code == 200
+    # Same content -> same slip id -> one slip row, two legs (not four).
+    assert first.json()["slipId"] == second.json()["slipId"]
+    summary = ledger.summary()
+    assert summary["slips"] == 1
+    assert summary["pendingPicks"] == 2
+
+
 def test_learning_endpoints_grade_and_report(tmp_path):
     ledger = PickLedger(db_path=tmp_path / "ledger.sqlite")
     _record_a_pick(ledger)
