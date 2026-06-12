@@ -133,7 +133,27 @@ async def gpt_privacy_policy() -> dict[str, Any]:
 
 @app.get("/gpt/openapi.json", include_in_schema=False)
 async def gpt_openapi_schema(request: Request) -> Any:
-    return build_gpt_action_openapi_schema(str(request.base_url).rstrip("/"))
+    return build_gpt_action_openapi_schema(_public_base_url(request))
+
+
+def _public_base_url(request: Request) -> str:
+    """The URL the GPT should call, baked into the schema's servers field.
+
+    Prefer an explicitly configured public address (the ngrok static domain or
+    OCLAY_PUBLIC_URL) so the schema is correct regardless of how a tunnel
+    forwards Host/proto headers. Falls back to the request's own base URL
+    (e.g. on Render, where the host is already the public one).
+    """
+    domain = os.getenv("OCLAY_NGROK_DOMAIN", "").strip()
+    if domain:
+        for prefix in ("https://", "http://"):
+            if domain.startswith(prefix):
+                domain = domain[len(prefix):]
+        return "https://" + domain.strip("/")
+    explicit = os.getenv("OCLAY_PUBLIC_URL", "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+    return str(request.base_url).rstrip("/")
 
 
 @app.get("/mlb/matchups")
