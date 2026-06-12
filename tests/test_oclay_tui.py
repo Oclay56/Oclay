@@ -5,12 +5,14 @@ from app.local_helper_tui import (
     BACKGROUND_FILL,
     DEFAULT_TUI_PALETTE,
     MENU_FOOTER_CUSHION_HEIGHT,
+    MENU_LABEL_TEXT,
     ROW_HOVER_FILL,
     build_tui_actions,
     clean_tui_palette,
     format_tui_action_row,
     hex_to_rgb,
     hex_to_windows_colorref,
+    rich_tui_action_row,
     rich_title_row,
     rgb_to_hex,
     textual_dependency_status,
@@ -48,6 +50,17 @@ def test_oclay_tui_keeps_two_bracket_row_format():
     assert "ctrl+r" in row
 
 
+def test_command_lettering_color_does_not_touch_shortcut_text():
+    row = rich_tui_action_row(build_tui_actions()[0], palette={"menuLabelText": "#55AAFF"})
+
+    span_styles = [str(span.style) for span in row.spans]
+
+    assert "Review" in row.plain
+    assert "ctrl+r" in row.plain
+    assert "bold #55AAFF" in span_styles
+    assert "#7F7F7F" in span_styles
+
+
 def test_oclay_branding_uses_display_name():
     assert APP_DISPLAY_NAME == "Oclay"
     assert "Oclay" in rich_title_row("ready").plain
@@ -75,14 +88,17 @@ def test_background_is_restored_black_fill():
     assert DEFAULT_TUI_PALETTE["outputPanel"] == "#101010"
     assert DEFAULT_TUI_PALETTE["panelBorder"] == "#5A5A5A"
     assert DEFAULT_TUI_PALETTE["shellBorder"] == "#6A6A6A"
+    assert MENU_LABEL_TEXT == "#B8B19C"
+    assert DEFAULT_TUI_PALETTE["menuLabelText"] == "#B8B19C"
     assert ROW_HOVER_FILL == "#3A3A3A"
 
 
-def test_rgb_theme_controls_background_and_center_console_only():
+def test_rgb_theme_controls_scoped_targets_only():
     palette = clean_tui_palette(
         {
             "background": "#202A44",
             "panel": "#252525",
+            "menuLabelText": "#55AAFF",
             "outputPanel": "#FFFFFF",
             "panelBorder": "#1010FF",
             "shellBorder": "#1010FF",
@@ -93,6 +109,7 @@ def test_rgb_theme_controls_background_and_center_console_only():
 
     assert palette["background"] == "#202A44"
     assert palette["panel"] == "#252525"
+    assert palette["menuLabelText"] == "#55AAFF"
     assert palette["outputPanel"] == "#252525"
     assert palette["panelBorder"] == "#5A5A5A"
     assert palette["shellBorder"] == "#6A6A6A"

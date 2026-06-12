@@ -26,6 +26,7 @@ PANEL_FILL = "#101010"
 PANEL_BORDER_COLOR = "#5A5A5A"
 SHELL_BORDER_COLOR = "#6A6A6A"
 ROW_HOVER_FILL = "#3A3A3A"
+MENU_LABEL_TEXT = "#B8B19C"
 
 os.environ.setdefault("COLORTERM", "truecolor")
 os.environ["TEXTUAL_COLOR_SYSTEM"] = "truecolor"
@@ -61,6 +62,7 @@ DEFAULT_TUI_PALETTE = {
     "errorText": "#FF6B8A",
     "rowHover": ROW_HOVER_FILL,
     "rowText": "#B8B19C",
+    "menuLabelText": MENU_LABEL_TEXT,
     "shortcutText": "#7F7F7F",
     "outputPanel": PANEL_FILL,
 }
@@ -210,7 +212,7 @@ def rich_tui_action_row(
         shortcut_style = f"{colors['shortcutText']} on {colors['rowHover']}"
     else:
         base_style = colors["shortcutText"]
-        label_style = f"bold {colors['rowText']}"
+        label_style = f"bold {colors['menuLabelText']}"
         shortcut_style = colors["shortcutText"]
     text = Text(row, style=base_style)
     label_start = 2
@@ -332,7 +334,15 @@ def windows_colorref_to_hex(value: int) -> str:
 
 
 def rgb_target_label(target_id: str) -> str:
-    return "Background" if target_id == "background" else "Center Console"
+    if target_id == "background":
+        return "Background"
+    if target_id == "panel":
+        return "Center Console"
+    return "Command Lettering"
+
+
+def rgb_target_color_key(target_id: str) -> str:
+    return target_id if target_id in {"background", "panel", "menuLabelText"} else "background"
 
 
 def rich_rgb_target_row(
@@ -344,7 +354,7 @@ def rich_rgb_target_row(
 ) -> Text:
     colors = clean_tui_palette(palette)
     label = rgb_target_label(target_id)
-    color_key = "background" if target_id == "background" else "panel"
+    color_key = rgb_target_color_key(target_id)
     color = colors[color_key]
     left = f" {'>' if selected else ' '} {label}"
     right = f"{color} "
@@ -435,7 +445,7 @@ if TEXTUAL_AVAILABLE:
         def paint_hover(self, hovered: bool) -> None:
             palette = getattr(self.app, "palette", DEFAULT_TUI_PALETTE)
             background = palette["rowHover"] if hovered else palette["panel"]
-            color = palette["highlightText"] if hovered else palette["rowText"]
+            color = palette["highlightText"] if hovered else palette["menuLabelText"]
             self.set_class(hovered, "menu-hover")
             self.styles.background = background
             self.styles.color = color
@@ -569,7 +579,7 @@ if TEXTUAL_AVAILABLE:
         CommandRow {{
             width: {MENU_ROW_WIDTH};
             height: 1;
-            color: {DEFAULT_TUI_PALETTE["rowText"]};
+            color: {DEFAULT_TUI_PALETTE["menuLabelText"]};
             background: {DEFAULT_TUI_PALETTE["panel"]};
             padding: 0 0;
         }}
@@ -579,7 +589,7 @@ if TEXTUAL_AVAILABLE:
         #actions > CommandRow.--highlight,
         #actions:focus > CommandRow.-highlight,
         #actions:focus > CommandRow.--highlight {{
-            color: {DEFAULT_TUI_PALETTE["rowText"]};
+            color: {DEFAULT_TUI_PALETTE["menuLabelText"]};
             background: {DEFAULT_TUI_PALETTE["panel"]};
             text-style: none;
         }}
@@ -651,7 +661,7 @@ if TEXTUAL_AVAILABLE:
 
         #rgb-targets {{
             width: {MENU_ROW_WIDTH};
-            height: 2;
+            height: 3;
             background: {DEFAULT_TUI_PALETTE["panel"]};
             scrollbar-size: 0 0;
             overflow: hidden hidden;
@@ -757,6 +767,7 @@ if TEXTUAL_AVAILABLE:
                                 yield ListView(
                                     RgbTargetRow("background"),
                                     RgbTargetRow("panel"),
+                                    RgbTargetRow("menuLabelText"),
                                     id="rgb-targets",
                                 )
                                 yield Static("", id="rgb-help")
@@ -959,14 +970,16 @@ if TEXTUAL_AVAILABLE:
             return clean[: max(0, OUTPUT_TEXT_WIDTH - 1)] + "…"
 
         def _selected_rgb_color(self) -> str:
-            return self.palette["background"] if self._selected_rgb_target == "background" else self.palette["panel"]
+            return self.palette[rgb_target_color_key(self._selected_rgb_target)]
 
         def _apply_rgb_target_color(self, target_id: str, color: str) -> None:
             if target_id == "background":
                 self.palette["background"] = color
-            else:
+            elif target_id == "panel":
                 self.palette["panel"] = color
                 self.palette["outputPanel"] = color
+            elif target_id == "menuLabelText":
+                self.palette["menuLabelText"] = color
             save_tui_palette(self.palette, root_dir=self.root_dir)
             self._apply_palette()
             self._refresh_layout(force=True)
