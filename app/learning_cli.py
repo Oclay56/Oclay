@@ -22,7 +22,6 @@ from typing import Any
 from .backtest import run_backtest
 from .backtest_model import run_model_backtest
 from .calibration import build_calibration_report
-from .clv import clv_report
 from .correlation_calibration import build_correlation_estimates
 from .grading import grade_pending_picks
 from .mlb_data import MLBDataEngine, MLBStatsClient, build_mlb_http_client
@@ -78,7 +77,6 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("calibrate", help="Refit calibration, market policy, and correlations.")
     sub.add_parser("summary", help="Print ledger accountability metrics.")
     sub.add_parser("backtest", help="Replay settled history into a realized-performance report.")
-    sub.add_parser("clv", help="Closing-line-value report over picks with a captured close.")
     model_cmd = sub.add_parser(
         "model-backtest",
         help="Re-score settled picks point-in-time and grade model calibration (uses MLB API).",
@@ -106,8 +104,6 @@ def main(argv: list[str] | None = None) -> int:
         result = PickLedger().summary()
     elif args.command == "backtest":
         result = run_backtest()
-    elif args.command == "clv":
-        result = clv_report()
     elif args.command == "model-backtest":
         result = asyncio.run(_model_backtest(args.min_prior_games))
     elif args.command == "timing":

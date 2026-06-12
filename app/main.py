@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import AsyncIterator
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -51,7 +51,6 @@ from .sgm_candidate_pool import (
 )
 from .backtest_model import run_model_backtest
 from .calibration import build_calibration_report
-from .clv import clv_report
 from .correlation_calibration import build_correlation_estimates
 from .grading import grade_pending_picks
 from .pick_ledger import PickLedger
@@ -1684,14 +1683,6 @@ async def oclay_timing_plan(
     return build_timing_plan(games)
 
 
-@app.get("/oclay/learning/clv")
-async def oclay_learning_clv(
-    ledger: PickLedger = Depends(get_pick_ledger),
-) -> dict[str, Any]:
-    """Closing-line-value report: the fast early signal of a real edge."""
-    return {"purpose": "oclay_clv_report", **clv_report(ledger=ledger)}
-
-
 @app.post("/oclay/learning/model-backtest")
 async def oclay_learning_model_backtest(
     payload: dict[str, Any] = Body(default_factory=dict),
@@ -1845,32 +1836,10 @@ def _record_pool_to_ledger(
     if not enabled:
         return {"recorded": False, "reason": "recording_disabled_by_request"}
     try:
-        ledger = PickLedger()
-        # Cutoff before insert: rows recorded on an earlier scan get their
-        # closing line refreshed to the odds seen now; rows first inserted by
-        # this scan keep only their opening price.
-        cutoff = datetime.now(timezone.utc).isoformat()
-        result = ledger.record_candidate_pool(pool, slate_date=slate_date)
-        closing = ledger.update_closing_odds(
-            _closing_snapshots_from_pool(pool),
-            recorded_before=cutoff,
-        )
-        return {"recorded": True, **result, **closing}
+        result = PickLedger().record_candidate_pool(pool, slate_date=slate_date)
+        return {"recorded": True, **result}
     except Exception as exc:  # noqa: BLE001 - persistence must not break the response
         return {"recorded": False, "reason": f"ledger_unavailable: {exc}"}
-
-
-def _closing_snapshots_from_pool(pool: dict[str, Any]) -> list[dict[str, Any]]:
-    rows = pool.get("rankedCandidates") or []
-    snapshots: list[dict[str, Any]] = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        row_id = row.get("rowId")
-        odds = row.get("odds")
-        if row_id and odds is not None:
-            snapshots.append({"rowId": row_id, "odds": odds})
-    return snapshots
 
 
 def _timezone_name() -> str:
