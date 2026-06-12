@@ -462,6 +462,50 @@ class PickLedger:
             for row in rows
         }
 
+    def record_quote_observations(self, observations: list[dict[str, Any]]) -> int:
+        now = _utc_now()
+        recorded = 0
+        with self._connect() as conn:
+            for obs in observations:
+                scalar = _float_or_none(obs.get("realizedScalar"))
+                if scalar is None:
+                    continue
+                conn.execute(
+                    """
+                    INSERT INTO quote_observations (
+                        product_odds, prior_ratio, real_quote, realized_scalar, recorded_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        _float_or_none(obs.get("productOdds")),
+                        _float_or_none(obs.get("priorRepricingRatio")),
+                        _float_or_none(obs.get("realQuote")),
+                        scalar,
+                        now,
+                    ),
+                )
+                recorded += 1
+            conn.commit()
+        return recorded
+
+    def load_quote_model(self) -> dict[str, Any]:
+        """Robust median repricing scalar over logged quote observations."""
+        with self._connect() as conn:
+            try:
+                rows = conn.execute(
+                    "SELECT realized_scalar FROM quote_observations WHERE realized_scalar IS NOT NULL"
+                ).fetchall()
+            except sqlite3.OperationalError:
+                return {"scalar": 1.0, "samples": 0}
+        scalars = sorted(
+            s for s in (float(row["realized_scalar"]) for row in rows) if 0.1 <= s <= 3.0
+        )
+        n = len(scalars)
+        if n == 0:
+            return {"scalar": 1.0, "samples": 0}
+        median = scalars[n // 2] if n % 2 else (scalars[n // 2 - 1] + scalars[n // 2]) / 2
+        return {"scalar": round(median, 4), "samples": n}
+
     def summary(self) -> dict[str, Any]:
         with self._connect() as conn:
             total = conn.execute("SELECT COUNT(*) AS c FROM picks").fetchone()["c"]
@@ -576,6 +620,15 @@ class PickLedger:
                     rho REAL,
                     samples INTEGER,
                     updated_at TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS quote_observations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    product_odds REAL,
+                    prior_ratio REAL,
+                    real_quote REAL,
+                    realized_scalar REAL,
+                    recorded_at TEXT
                 );
                 """
             )

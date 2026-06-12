@@ -64,5 +64,28 @@ def test_log5_batter_strikeouts_builds_combined_mean():
     assert 0.0 < log5["combinedKRatePerPA"] < 1.0
 
 
+def test_weather_boosts_home_runs_on_hot_day_with_wind_out():
+    candidate = {
+        "normalizedMarketKey": "home-runs",
+        "gameContext": {"venue": {"name": "X"}, "weather": {"temp": "88 °F", "wind": "15 mph, Out To CF"}},
+        "season": {"average": 0.3},
+    }
+    result = sharpen_mean(0.3, market_key="home-runs", candidate=candidate)
+    weather = next(a for a in result["adjustments"] if a["source"] == "weather")
+    assert weather["factor"] > 1.0
+    assert result["mean"] > 0.3
+
+
+def test_weather_suppresses_on_cold_day_with_wind_in():
+    candidate = {
+        "normalizedMarketKey": "home-runs",
+        "gameContext": {"venue": {"name": "X"}, "weather": {"temp": "48 °F", "wind": "12 mph, In From CF"}},
+        "season": {"average": 0.3},
+    }
+    result = sharpen_mean(0.3, market_key="home-runs", candidate=candidate)
+    weather = next(a for a in result["adjustments"] if a["source"] == "weather")
+    assert weather["factor"] < 1.0
+
+
 def test_no_adjustments_returns_none():
     assert sharpen_mean(1.0, market_key="hits", candidate={}) is None

@@ -4,7 +4,9 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from typing import Any
 
-from .correlation import leg_correlation_penalty, slip_probability_and_ev
+from .correlation import leg_correlation_penalty
+from .exposure import slate_exposure_report
+from .quote_model import slip_projection
 from .decision_profiles import evidence_check, evidence_windows, season_evidence, trend_labels
 from .mlb_bridge import enrich_props_with_mlb_data, stat_mapping_for_market
 from .market_normalization import normalize_mlb_prop_market_key
@@ -12,9 +14,11 @@ from .matchup_model import sharpen_mean
 from .mlb_props import slug_key
 from .probability_engine import (
     devig_two_way,
+    effective_sample_size,
     estimate_side_probability,
     get_active_calibrations,
     get_active_market_policies,
+    probability_confidence_interval,
 )
 from .slip_optimizer import build_ev_max_slip
 from .stake_sgm_browser import (
@@ -400,6 +404,7 @@ async def build_sgm_candidate_pool_from_boards(
         "rankedCandidates": ranked,
         "perGame": per_game,
         "slipProjections": _slate_slip_projections(ranked),
+        "portfolioExposure": _slate_portfolio_exposure(ranked),
         "lineCurveContest": {
             "contestedGroups": line_curve_contest["contestedGroups"],
             "valueLeaders": line_curve_contest["valueLeaders"][:15],
@@ -777,6 +782,18 @@ def _probability_assessment(
     if adjusted is not None and edge_reference is not None:
         edge = round(adjusted - edge_reference, 4)
 
+    # Honest uncertainty: a wide interval means the estimate is thin-sample.
+    confidence_interval = None
+    conservative_edge = None
+    if estimated is not None:
+        season_games = _float_or_none((candidate.get("seasonSample") or {}).get("games"))
+        effective_n = effective_sample_size(recent_games, season_games)
+        confidence_interval = probability_confidence_interval(adjusted or estimated, effective_n)
+        if edge_reference is not None:
+            conservative_edge = round(
+                confidence_interval["conservativeProbability"] - edge_reference, 4
+            )
+
     edge_status = _edge_status(edge, data_quality)
     reason_tags = []
     if edge_status in {"clear_possible_edge", "thin_edge"}:
@@ -787,6 +804,10 @@ def _probability_assessment(
         reason_tags.append("edge_measured_vs_devigged_fair_odds")
     if calibration:
         reason_tags.append("calibration_correction_applied")
+    if confidence_interval and confidence_interval["width"] >= 0.30:
+        reason_tags.append("wide_probability_interval_thin_sample")
+    if conservative_edge is not None and conservative_edge <= 0 and (edge or 0) > 0:
+        reason_tags.append("edge_not_robust_to_uncertainty")
 
     distributional = (estimate or {}).get("distributional") or {}
     shrinkage = (estimate or {}).get("shrinkage") or {}
@@ -802,7 +823,10 @@ def _probability_assessment(
         "winProbability": estimated,
         "estimatedProbability": estimated,
         "adjustedEstimatedProbability": adjusted,
+        "confidenceInterval": confidence_interval,
+        "conservativeWinProbability": (confidence_interval or {}).get("conservativeProbability"),
         "edge": edge,
+        "conservativeEdge": conservative_edge,
         "edgeStatus": edge_status,
         "edgeReference": "devigged_fair_probability" if fair is not None else "raw_implied_probability",
         "dataQuality": data_quality,
@@ -1970,6 +1994,23 @@ def _apply_correlation_penalties(scored_rows: list[dict[str, Any]]) -> int:
     return adjusted
 
 
+def _slate_portfolio_exposure(ranked: list[dict[str, Any]]) -> dict[str, Any]:
+    """Cross-game concentration if each game's candidates were a slip.
+
+    Surfaces whether the slate piles onto one player/team/game so the GPT can
+    diversify before betting; the full caps live in app.exposure.
+    """
+    by_game: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in ranked:
+        by_game[str(row.get("fixtureSlug") or "unknown")].append(row)
+    pseudo_slips = [
+        {"legs": legs, "expectedValue": None}
+        for legs in by_game.values()
+        if len(legs) >= GAME_CONTEST_MIN_LEGS
+    ]
+    return slate_exposure_report(pseudo_slips)
+
+
 def _slate_slip_projections(ranked: list[dict[str, Any]]) -> dict[str, Any]:
     """Per-game modeled win probability + EV for the suggested groups.
 
@@ -2028,18 +2069,21 @@ def _ev_max_slips_by_game(by_game: dict[str, list[dict[str, Any]]]) -> dict[str,
 
 
 def _slip_projection_for_legs(legs: list[dict[str, Any]]) -> dict[str, Any]:
-    projection = slip_probability_and_ev(legs)
+    projection = slip_projection(legs)
     return {
         "legCount": projection["legCount"],
         "pricedLegCount": projection["pricedLegCount"],
         "rawProductOdds": projection["rawProductOdds"],
+        "predictedQuote": projection.get("predictedQuote"),
         "estimatedWinProbability": projection["estimatedWinProbability"],
         "independenceWinProbability": projection["independenceWinProbability"],
         "correlationLift": projection["correlationLift"],
         "expectedValue": projection["expectedValue"],
+        "productExpectedValue": projection.get("productExpectedValue"),
         "effectiveCorrelation": projection["effectiveCorrelation"],
         "fullyPriced": projection["fullyPriced"],
         "method": projection["method"],
+        "evBasis": "predicted_stake_quote",
     }
 
 

@@ -22,6 +22,7 @@ Every adjustment is reported so the edge is auditable, never a black box.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 
@@ -43,6 +44,18 @@ DEFAULT_BATTER_PA_PER_GAME = 4.1
 HANDEDNESS_BOUND = (0.85, 1.18)
 HANDEDNESS_MIN_SPLIT_GAMES = 15
 PITCHER_K_LEAN_BOUND = (0.82, 1.20)
+
+# Markets whose offensive output responds to weather (carry + wind).
+WEATHER_MARKETS = {"hits", "total_bases", "runs", "rbi", "home_runs", "hits_runs_rbis"}
+WEATHER_BOUND = (0.90, 1.12)
+NEUTRAL_TEMP_F = 70.0
+
+# Home-plate umpire K/walk tendencies. Empty by default — populate from an
+# umpire-stats source (e.g. UmpScorecards) to activate; values multiply the
+# per-game mean for the keyed markets. This is the scaffold; the model stays a
+# no-op until the table and the game-feed umpire name are both present.
+UMPIRE_FACTORS: dict[str, dict[str, float]] = {}
+UMPIRE_BOUND = (0.85, 1.18)
 
 # Directional venue multipliers on the per-game mean. Keys are distinctive
 # lowercase substrings of the MLB venue name; values map market -> factor.
@@ -100,6 +113,16 @@ def sharpen_mean(
     if park is not None:
         mean *= park["factor"]
         adjustments.append(park)
+
+    weather = _weather_factor(market, candidate)
+    if weather is not None:
+        mean *= weather["factor"]
+        adjustments.append(weather)
+
+    umpire = _umpire_factor(market, candidate)
+    if umpire is not None:
+        mean *= umpire["factor"]
+        adjustments.append(umpire)
 
     log5 = _log5_batter_strikeouts(market, candidate)
     if log5 is not None:
@@ -183,6 +206,75 @@ def _park_factor(market: str, candidate: dict[str, Any]) -> dict[str, Any] | Non
                 "factor": round(float(factor), 4),
             }
     return None
+
+
+def _weather_factor(market: str, candidate: dict[str, Any]) -> dict[str, Any] | None:
+    if market not in WEATHER_MARKETS:
+        return None
+    weather = ((candidate.get("gameContext") or {}).get("weather")) or {}
+    temp = _parse_temperature(weather.get("temp"))
+    wind_speed, wind_dir = _parse_wind(weather.get("wind"))
+    if temp is None and wind_speed is None:
+        return None
+
+    factor = 1.0
+    power = 1.0 if market in {"home_runs", "total_bases"} else 0.5
+    if temp is not None:
+        factor += ((temp - NEUTRAL_TEMP_F) / 10.0) * 0.015 * power
+    if wind_speed is not None and wind_dir in {"out", "in"}:
+        signed = wind_speed if wind_dir == "out" else -wind_speed
+        factor += (signed / 10.0) * 0.02 * power
+    factor = max(WEATHER_BOUND[0], min(WEATHER_BOUND[1], factor))
+    if abs(factor - 1.0) < 1e-4:
+        return None
+    return {
+        "source": "weather",
+        "temperatureF": temp,
+        "windSpeedMph": wind_speed,
+        "windDirection": wind_dir,
+        "factor": round(factor, 4),
+    }
+
+
+def _umpire_factor(market: str, candidate: dict[str, Any]) -> dict[str, Any] | None:
+    if market not in {"batter_strikeouts", "strikeouts", "pitcher_strikeouts", "batter_walks", "walks_allowed"}:
+        return None
+    if not UMPIRE_FACTORS:
+        return None
+    umpire = ((candidate.get("gameContext") or {}).get("homePlateUmpire")) or {}
+    name = umpire.get("name") if isinstance(umpire, dict) else umpire
+    if not name:
+        return None
+    table = UMPIRE_FACTORS.get(str(name).strip().lower())
+    if not table:
+        return None
+    metric = "strikeouts" if "strikeout" in market or market == "strikeouts" else "walks"
+    raw = _float_or_none(table.get(metric))
+    if raw is None:
+        return None
+    factor = max(UMPIRE_BOUND[0], min(UMPIRE_BOUND[1], raw))
+    return {"source": "home_plate_umpire", "umpire": name, "metric": metric, "factor": round(factor, 4)}
+
+
+def _parse_temperature(value: Any) -> float | None:
+    if value is None:
+        return None
+    match = re.search(r"-?\d+(?:\.\d+)?", str(value))
+    return float(match.group()) if match else None
+
+
+def _parse_wind(value: Any) -> tuple[float | None, str | None]:
+    if value is None:
+        return None, None
+    text = str(value).lower()
+    speed_match = re.search(r"(\d+(?:\.\d+)?)\s*mph", text) or re.search(r"^\s*(\d+(?:\.\d+)?)", text)
+    speed = float(speed_match.group(1)) if speed_match else None
+    direction = None
+    if "out" in text:
+        direction = "out"
+    elif "in" in text:
+        direction = "in"
+    return speed, direction
 
 
 def _log5_batter_strikeouts(market: str, candidate: dict[str, Any]) -> dict[str, Any] | None:

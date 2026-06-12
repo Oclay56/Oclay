@@ -7,9 +7,26 @@ from app.probability_engine import (
     apply_matchup_shift,
     devig_two_way,
     distributional_line_probability,
+    effective_sample_size,
     estimate_side_probability,
+    probability_confidence_interval,
     shrink_recent_rate,
 )
+
+
+def test_thin_samples_get_wider_intervals_than_full_samples():
+    thin = probability_confidence_interval(0.62, effective_sample_size(5, 0))
+    full = probability_confidence_interval(0.62, effective_sample_size(15, 60))
+    assert thin["width"] > full["width"]
+    # The conservative (lower) bound is far more pessimistic on thin data.
+    assert thin["conservativeProbability"] < full["conservativeProbability"]
+    assert full["low"] < 0.62 < full["high"]
+
+
+def test_effective_sample_caps_season_contribution():
+    # A huge season cannot make the estimate look near-certain.
+    capped = effective_sample_size(0, 500)
+    assert capped <= effective_sample_size(0, 50) + 1e-9
 
 
 def test_distributional_probability_matches_poisson_limit():

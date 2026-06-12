@@ -94,14 +94,35 @@ def real_quote_ev(
 
 
 def real_quote_check_from_result(result: dict[str, Any]) -> dict[str, Any]:
-    """Build the real-quote EV check from a review-slip result payload."""
+    """Build the real-quote EV check from a review-slip result payload.
+
+    When a real combined quote is parsed, log it as a training observation so
+    the quote predictor tightens toward Stake's actual repricing over time.
+    """
     selected = [row for row in (result.get("selectedRows") or []) if isinstance(row, dict)]
     legs = [_leg_from_selected_row(row) for row in selected]
     sidebar_text = _sidebar_text_from_result(result)
     quote = parse_sidebar_quote(sidebar_text)
-    check = real_quote_ev(legs, quote.get("quotedOdds"))
+    quoted_odds = quote.get("quotedOdds")
+    check = real_quote_ev(legs, quoted_odds)
     check["quoteSource"] = quote.get("source")
+    _log_quote_observation(legs, quoted_odds)
     return check
+
+
+def _log_quote_observation(legs: list[dict[str, Any]], quoted_odds: Any) -> None:
+    if not quoted_odds:
+        return
+    try:
+        from .pick_ledger import PickLedger
+        from .quote_model import invalidate_quote_model_cache, quote_observation
+
+        observation = quote_observation(legs, float(quoted_odds))
+        if observation is not None:
+            PickLedger().record_quote_observations([observation])
+            invalidate_quote_model_cache()
+    except Exception:
+        pass
 
 
 def _leg_from_selected_row(row: dict[str, Any]) -> dict[str, Any]:

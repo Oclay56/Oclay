@@ -14,8 +14,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from .correlation import slip_probability_and_ev
 from .mlb_props import slug_key
+from .quote_model import slip_projection
 
 
 def build_ev_max_slip(
@@ -77,7 +77,7 @@ def build_ev_max_slip(
             }
         )
 
-    projection = best_snapshot or slip_probability_and_ev(selected)
+    projection = best_snapshot or slip_projection(selected)
     meets_minimum = len(selected) >= min_legs
     return {
         "mode": "ev_max",
@@ -116,7 +116,7 @@ def _best_addition(
         if one_leg_per_player and _player_key(leg) in used_players:
             continue
         trial = selected + [leg]
-        projection = slip_probability_and_ev(trial)
+        projection = slip_projection(trial)
         product_odds = projection.get("rawProductOdds") or 0.0
         win = projection.get("estimatedWinProbability")
         ev = projection.get("expectedValue")

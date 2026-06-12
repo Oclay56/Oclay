@@ -62,6 +62,47 @@ _calibration_cache: dict[str, Any] = {"loadedAt": 0.0, "corrections": {}}
 _market_policy_cache: dict[str, Any] = {"loadedAt": 0.0, "policies": {}}
 
 
+def effective_sample_size(recent_games: Any, season_games: Any) -> float:
+    """Blend recent and season game counts into an effective sample size.
+
+    Weighted by how the estimate uses them (recent form vs season rate), with
+    the season contribution capped so a long season cannot make a volatile
+    estimate look more certain than it is.
+    """
+    recent = max(0.0, _float_or_none(recent_games) or 0.0)
+    season = min(50.0, max(0.0, _float_or_none(season_games) or 0.0))
+    blended = (0.3 * recent + 0.5 * season) / 0.8
+    return max(1.0, blended)
+
+
+def probability_confidence_interval(
+    probability: float,
+    effective_n: float,
+    *,
+    z: float = 1.96,
+) -> dict[str, Any]:
+    """Normal-approx interval on a probability given an effective sample size.
+
+    The width honestly reflects how much data backs the estimate: a 0.62 from
+    a handful of games gets a wide interval; from a full sample, a tight one.
+    The conservative bound is the lower edge, for cautious EV decisions.
+    """
+    p = _clamp_probability(probability)
+    n = max(1.0, float(effective_n))
+    se = math.sqrt(p * (1.0 - p) / n)
+    low = _clamp_probability(p - z * se)
+    high = _clamp_probability(p + z * se)
+    return {
+        "pointEstimate": round(p, 4),
+        "standardError": round(se, 4),
+        "low": round(low, 4),
+        "high": round(high, 4),
+        "width": round(high - low, 4),
+        "conservativeProbability": round(low, 4),
+        "effectiveSampleSize": round(n, 2),
+    }
+
+
 def implied_probability(odds: Any) -> float | None:
     value = _float_or_none(odds)
     if value is None or value <= 1.0:

@@ -44,6 +44,10 @@ Never reverse this order. Do not invent lines, odds, players, markets, row IDs, 
 - `marketPolicy.killedMarkets`: markets excluded for negative realized ROI over graded picks; rows may be tagged `market_downweighted_negative_realized_edge`.
 - `meanAdjustments`: handedness, Log5 strikeout, and park-factor sharpening applied to the per-game mean before the probability.
 - `realQuoteCheck` (review-slip result): `realExpectedValue` and `correlationRepricingGap` versus Stake's actual combined SGM quote — the most authoritative EV read.
+- `predictedQuote` (slip projections): the repriced SGM price Stake is expected to quote; slip `expectedValue` is computed against it, not the inflated product of legs.
+- `confidenceInterval` / `conservativeWinProbability` / `conservativeEdge`: the sample-driven uncertainty on the estimate; a wide interval (tag `wide_probability_interval_thin_sample`) means thin data, and `conservativeEdge <= 0` (tag `edge_not_robust_to_uncertainty`) means the edge does not survive that uncertainty.
+- `portfolioExposure`: cross-game player/team/game concentration so the slate is not piled onto one player or game; over-exposure raises `concentrationFlags`.
+- `meanAdjustments` now also includes `weather` (temperature + wind on power/contact markets) alongside handedness, Log5, and park.
 
 ## Market Contest
 
