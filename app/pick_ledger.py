@@ -194,6 +194,150 @@ class PickLedger:
         )
         return 1 if cursor.rowcount > 0 else 0
 
+    def record_imported_slips(self, slips: Iterable[Any], *, season: int = 2025) -> dict[str, Any]:
+        """Load parsed Stake history (app.bet_history_import) as graded picks.
+
+        Each supported leg whose outcome is known is inserted already settled
+        (no later MLB grading needed) so realized hit rates and slip ROI are
+        available immediately. Keys are deterministic, so re-importing the same
+        export is idempotent rather than duplicating history.
+        """
+        import hashlib
+
+        from .bet_history_import import slate_date_for
+        from .mlb_props import slug_key
+
+        legs_loaded = 0
+        slips_loaded = 0
+        legs_skipped = 0
+        now = _utc_now()
+        with self._connect() as conn:
+            for slip in slips:
+                slip_legs = list(getattr(slip, "legs", []) or [])
+                if not slip_legs:
+                    continue
+                slate_date = slate_date_for(getattr(slip, "date_text", None), season)
+                matchup = getattr(slip, "matchup", None)
+                signature = "|".join(
+                    sorted(
+                        f"{leg.player}:{leg.market_key}:{leg.side}:{leg.line}"
+                        for leg in slip_legs
+                    )
+                )
+                slip_id = "import_" + hashlib.sha1(
+                    f"{slate_date}:{signature}".encode("utf-8")
+                ).hexdigest()[:16]
+
+                leg_keys: list[str] = []
+                for leg in slip_legs:
+                    if not leg.supported or leg.outcome not in {GRADE_WIN, GRADE_LOSS, GRADE_PUSH}:
+                        legs_skipped += 1
+                        continue
+                    pick_key = (
+                        f"import:{slate_date}:{slug_key(leg.player or '')}:"
+                        f"{leg.market_key}:{leg.side}:{leg.line}"
+                    )
+                    cur = conn.execute(
+                        """
+                        INSERT INTO picks (
+                            pick_key, run_id, slate_date, mode, fixture_slug, matchup, row_id,
+                            mlb_person_id, player, team, market_key, side, line, odds,
+                            implied_probability, fair_probability, estimated_probability, edge,
+                            edge_status, score, reliability_band, recorded_at,
+                            graded_at, outcome, actual_value, closing_odds, clv
+                        ) VALUES (?, ?, ?, ?, NULL, ?, NULL, NULL, ?, NULL, ?, ?, ?, NULL,
+                                  NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, ?, NULL, NULL)
+                        ON CONFLICT(pick_key) DO NOTHING
+                        """,
+                        (
+                            pick_key,
+                            slip_id,
+                            slate_date,
+                            "imported_history",
+                            matchup,
+                            leg.player,
+                            leg.market_key,
+                            leg.side,
+                            _float_or_none(leg.line),
+                            now,
+                            now,
+                            leg.outcome,
+                            _float_or_none(leg.actual),
+                        ),
+                    )
+                    if cur.rowcount > 0:
+                        legs_loaded += 1
+                    leg_keys.append(pick_key)
+
+                slips_loaded += self._insert_imported_slip(
+                    conn,
+                    slip_id=slip_id,
+                    slate_date=slate_date,
+                    odds=_float_or_none(getattr(slip, "odds", None)),
+                    parsed_legs=slip_legs,
+                    leg_keys=leg_keys,
+                    now=now,
+                )
+            conn.commit()
+        return {
+            "slipsLoaded": slips_loaded,
+            "legsLoaded": legs_loaded,
+            "legsSkipped": legs_skipped,
+        }
+
+    def _insert_imported_slip(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        slip_id: str,
+        slate_date: str | None,
+        odds: float | None,
+        parsed_legs: list[Any],
+        leg_keys: list[str],
+        now: str,
+    ) -> int:
+        # Slip result is only trustworthy when every leg settled cleanly to
+        # win/loss; a push/void/unknown leg reprices the parlay, so we cannot
+        # reconstruct its odds and mark it indeterminate (excluded from ROI).
+        outcomes = [leg.outcome for leg in parsed_legs]
+        if any(o not in {GRADE_WIN, GRADE_LOSS} for o in outcomes):
+            result = "indeterminate"
+        elif all(o == GRADE_WIN for o in outcomes):
+            result = GRADE_WIN
+        else:
+            result = GRADE_LOSS
+        cur = conn.execute(
+            """
+            INSERT INTO slips (
+                slip_id, run_id, slate_date, mode, leg_count, raw_product_odds,
+                estimated_win_probability, expected_value, created_at, graded_at, result
+            ) VALUES (?, NULL, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)
+            ON CONFLICT(slip_id) DO NOTHING
+            """,
+            (
+                slip_id,
+                slate_date,
+                "imported_history",
+                len(parsed_legs),
+                odds,
+                now,
+                now,
+                result,
+            ),
+        )
+        if cur.rowcount <= 0:
+            return 0
+        for index, pick_key in enumerate(leg_keys):
+            conn.execute(
+                """
+                INSERT INTO slip_legs (slip_id, leg_index, row_id, pick_key)
+                VALUES (?, ?, NULL, ?)
+                ON CONFLICT(slip_id, leg_index) DO UPDATE SET pick_key = excluded.pick_key
+                """,
+                (slip_id, index, pick_key),
+            )
+        return 1
+
     def record_closing_snapshot(self, snapshots: Iterable[dict[str, Any]]) -> dict[str, Any]:
         """Update pending picks with the odds seen near first pitch (for CLV)."""
         updated = 0
@@ -308,6 +452,33 @@ class PickLedger:
             params.append(min_estimated)
         with self._connect() as conn:
             return [dict(row) for row in conn.execute(query, params).fetchall()]
+
+    def settled_picks(self) -> list[dict[str, Any]]:
+        """Every pick settled to win/loss/push, regardless of model scoring.
+
+        Unlike ``graded_picks`` this does not require an estimated probability,
+        so imported history (which has no model estimate) is included. This is
+        the read path the backtest harness uses.
+        """
+        with self._connect() as conn:
+            return [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT * FROM picks WHERE outcome IN (?, ?, ?)",
+                    (GRADE_WIN, GRADE_LOSS, GRADE_PUSH),
+                ).fetchall()
+            ]
+
+    def decided_slips(self) -> list[dict[str, Any]]:
+        """Slips that resolved cleanly to win or loss (for realized ROI)."""
+        with self._connect() as conn:
+            return [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT * FROM slips WHERE result IN (?, ?)",
+                    (GRADE_WIN, GRADE_LOSS),
+                ).fetchall()
+            ]
 
     def save_calibrations(self, corrections: dict[str, dict[str, Any]]) -> int:
         now = _utc_now()

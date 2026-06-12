@@ -105,10 +105,19 @@ TUI_ACTIONS: tuple[TuiAction, ...] = (
     TuiAction("exit", "Exit", "ctrl+e", "Close the TUI.", "exit", "Exiting"),
 )
 MENU_ROW_COUNT = len(TUI_ACTIONS)
+TUI_RGB_PRESET_KEYS = ("background", "panel", "menuLabelText")
+RGB_COLOR_TARGET_IDS = frozenset(TUI_RGB_PRESET_KEYS)
+RGB_PRESET_SAVE_ID = "savePreset"
+RGB_PRESET_LOAD_ID = "loadPreset"
+RGB_TARGET_ROW_COUNT = len(TUI_RGB_PRESET_KEYS) + 2
 
 
 def tui_theme_path(*, root_dir: Path = ROOT_DIR) -> Path:
     return root_dir / "data" / "workflow" / "helper-tui-theme.json"
+
+
+def tui_color_presets_dir(*, root_dir: Path = ROOT_DIR) -> Path:
+    return root_dir / "data" / "workflow" / "tui-color-presets"
 
 
 def clean_tui_palette(raw: dict[str, Any] | None = None) -> dict[str, str]:
@@ -144,6 +153,57 @@ def save_tui_palette(
     clean = clean_tui_palette(palette)
     settings_path.write_text(json.dumps(clean, indent=2) + "\n", encoding="utf-8")
     return settings_path
+
+
+def tui_color_preset_payload(palette: dict[str, str]) -> dict[str, str]:
+    clean = clean_tui_palette(palette)
+    return {key: clean[key] for key in TUI_RGB_PRESET_KEYS}
+
+
+def save_tui_color_preset(palette: dict[str, str], path: Path) -> Path:
+    preset_path = Path(path)
+    if preset_path.suffix.lower() != ".json":
+        preset_path = preset_path.with_suffix(".json")
+    preset_path.parent.mkdir(parents=True, exist_ok=True)
+    preset_path.write_text(
+        json.dumps(tui_color_preset_payload(palette), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return preset_path
+
+
+def load_tui_color_preset(path: Path) -> dict[str, str]:
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("Could not read that RGB preset.") from exc
+    if not isinstance(raw, dict):
+        raise ValueError("That RGB preset is not valid.")
+    preset: dict[str, str] = {}
+    for key in TUI_RGB_PRESET_KEYS:
+        value = raw.get(key)
+        if not isinstance(value, str) or not _is_hex_color(value):
+            raise ValueError(f"That RGB preset is missing {rgb_target_label(key)}.")
+        preset[key] = value.upper()
+    return preset
+
+
+def _path_inside_directory(path: Path, directory: Path) -> bool:
+    try:
+        path.resolve().relative_to(directory.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def keep_tui_preset_path_in_directory(path: Path, directory: Path) -> Path:
+    preset_dir = directory.resolve()
+    preset_path = Path(path)
+    if preset_path.suffix.lower() != ".json":
+        preset_path = preset_path.with_suffix(".json")
+    if not _path_inside_directory(preset_path, preset_dir):
+        return preset_dir / preset_path.name
+    return preset_path
 
 
 def textual_dependency_status() -> dict[str, Any]:
@@ -338,11 +398,17 @@ def rgb_target_label(target_id: str) -> str:
         return "Background"
     if target_id == "panel":
         return "Center Console"
-    return "Command Lettering"
+    if target_id == "menuLabelText":
+        return "Command Lettering"
+    if target_id == RGB_PRESET_SAVE_ID:
+        return "Save Preset"
+    if target_id == RGB_PRESET_LOAD_ID:
+        return "Load Preset"
+    return "RGB"
 
 
-def rgb_target_color_key(target_id: str) -> str:
-    return target_id if target_id in {"background", "panel", "menuLabelText"} else "background"
+def rgb_target_color_key(target_id: str) -> str | None:
+    return target_id if target_id in RGB_COLOR_TARGET_IDS else None
 
 
 def rich_rgb_target_row(
@@ -355,9 +421,8 @@ def rich_rgb_target_row(
     colors = clean_tui_palette(palette)
     label = rgb_target_label(target_id)
     color_key = rgb_target_color_key(target_id)
-    color = colors[color_key]
     left = f" {'>' if selected else ' '} {label}"
-    right = f"{color} "
+    right = f"{colors[color_key]} " if color_key is not None else "file "
     inner_width = max(width - 2, 24)
     row = f"[{left}{' ' * max(inner_width - len(left) - len(right), 1)}{right}]"
     style = f"{colors['highlightText']} on {colors['rowHover']}" if selected else colors["shortcutText"]
@@ -433,6 +498,63 @@ def choose_native_rgb_color(initial_color: str, *, title: str = "OCLAY RGB") -> 
             except Exception:
                 pass
     return None
+
+
+def choose_tui_preset_save_path(preset_dir: Path) -> Path | None:
+    preset_dir.mkdir(parents=True, exist_ok=True)
+    root = None
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        root.update()
+        selected = filedialog.asksaveasfilename(
+            title="Save OCLAY RGB preset",
+            initialdir=str(preset_dir),
+            defaultextension=".json",
+            filetypes=[("OCLAY RGB presets", "*.json"), ("JSON files", "*.json")],
+            parent=root,
+        )
+        return Path(selected) if selected else None
+    except Exception:
+        return None
+    finally:
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:
+                pass
+
+
+def choose_tui_preset_load_path(preset_dir: Path) -> Path | None:
+    preset_dir.mkdir(parents=True, exist_ok=True)
+    root = None
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        root.update()
+        selected = filedialog.askopenfilename(
+            title="Load OCLAY RGB preset",
+            initialdir=str(preset_dir),
+            filetypes=[("OCLAY RGB presets", "*.json"), ("JSON files", "*.json")],
+            parent=root,
+        )
+        return Path(selected) if selected else None
+    except Exception:
+        return None
+    finally:
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:
+                pass
 
 
 if TEXTUAL_AVAILABLE:
@@ -661,7 +783,7 @@ if TEXTUAL_AVAILABLE:
 
         #rgb-targets {{
             width: {MENU_ROW_WIDTH};
-            height: 3;
+            height: {RGB_TARGET_ROW_COUNT};
             background: {DEFAULT_TUI_PALETTE["panel"]};
             scrollbar-size: 0 0;
             overflow: hidden hidden;
@@ -768,6 +890,8 @@ if TEXTUAL_AVAILABLE:
                                     RgbTargetRow("background"),
                                     RgbTargetRow("panel"),
                                     RgbTargetRow("menuLabelText"),
+                                    RgbTargetRow(RGB_PRESET_SAVE_ID),
+                                    RgbTargetRow(RGB_PRESET_LOAD_ID),
                                     id="rgb-targets",
                                 )
                                 yield Static("", id="rgb-help")
@@ -937,7 +1061,7 @@ if TEXTUAL_AVAILABLE:
 
         def _refresh_rgb_page(self) -> None:
             self.query_one("#rgb-target-label", Static).update("RGB Target")
-            self.query_one("#rgb-help", Static).update("Select a target to open the Windows color picker.")
+            self.query_one("#rgb-help", Static).update("Pick a target, or save/load an RGB preset.")
             for row in self.query(RgbTargetRow):
                 row.paint_selected(False)
 
@@ -970,7 +1094,8 @@ if TEXTUAL_AVAILABLE:
             return clean[: max(0, OUTPUT_TEXT_WIDTH - 1)] + "…"
 
         def _selected_rgb_color(self) -> str:
-            return self.palette[rgb_target_color_key(self._selected_rgb_target)]
+            color_key = rgb_target_color_key(self._selected_rgb_target)
+            return self.palette[color_key or "background"]
 
         def _apply_rgb_target_color(self, target_id: str, color: str) -> None:
             if target_id == "background":
@@ -994,6 +1119,47 @@ if TEXTUAL_AVAILABLE:
                 return
             self._inline_message = f"{target_label} set to {next_color}."
             self._apply_rgb_target_color(target_id, next_color)
+
+        def _save_rgb_preset(self) -> None:
+            preset_dir = tui_color_presets_dir(root_dir=self.root_dir)
+            selected = choose_tui_preset_save_path(preset_dir)
+            if selected is None:
+                self._inline_message = "RGB preset save canceled."
+                self._refresh_layout(force=True)
+                return
+            path = keep_tui_preset_path_in_directory(selected, preset_dir)
+            try:
+                saved_path = save_tui_color_preset(self.palette, path)
+            except OSError:
+                self._inline_message = "Could not save RGB preset."
+                self._refresh_layout(force=True)
+                return
+            self._inline_message = f"Saved RGB preset: {saved_path.stem}."
+            self._refresh_layout(force=True)
+
+        def _load_rgb_preset(self) -> None:
+            preset_dir = tui_color_presets_dir(root_dir=self.root_dir)
+            selected = choose_tui_preset_load_path(preset_dir)
+            if selected is None:
+                self._inline_message = "RGB preset load canceled."
+                self._refresh_layout(force=True)
+                return
+            if not _path_inside_directory(selected, preset_dir):
+                self._inline_message = "Pick a preset from the TUI presets folder."
+                self._refresh_layout(force=True)
+                return
+            try:
+                preset = load_tui_color_preset(selected)
+            except ValueError as exc:
+                self._inline_message = str(exc)
+                self._refresh_layout(force=True)
+                return
+            self.palette.update(preset)
+            self.palette["outputPanel"] = self.palette["panel"]
+            save_tui_palette(self.palette, root_dir=self.root_dir)
+            self._apply_palette()
+            self._inline_message = f"Loaded RGB preset: {selected.stem}."
+            self._refresh_layout(force=True)
 
         def _open_page(self, action: TuiAction) -> None:
             self._active_action = action
@@ -1024,7 +1190,12 @@ if TEXTUAL_AVAILABLE:
 
         def on_list_view_selected(self, event: ListView.Selected) -> None:
             if isinstance(event.item, RgbTargetRow):
-                self._open_native_rgb_picker(event.item.target_id)
+                if event.item.target_id == RGB_PRESET_SAVE_ID:
+                    self._save_rgb_preset()
+                elif event.item.target_id == RGB_PRESET_LOAD_ID:
+                    self._load_rgb_preset()
+                else:
+                    self._open_native_rgb_picker(event.item.target_id)
                 return
             action = getattr(event.item, "tui_action", None)
             if isinstance(action, TuiAction):

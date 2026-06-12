@@ -1,3 +1,4 @@
+import json
 import os
 
 from app.local_helper_cli import APP_DISPLAY_NAME
@@ -7,15 +8,22 @@ from app.local_helper_tui import (
     MENU_FOOTER_CUSHION_HEIGHT,
     MENU_LABEL_TEXT,
     ROW_HOVER_FILL,
+    TUI_RGB_PRESET_KEYS,
     build_tui_actions,
     clean_tui_palette,
     format_tui_action_row,
     hex_to_rgb,
     hex_to_windows_colorref,
+    keep_tui_preset_path_in_directory,
+    load_tui_color_preset,
     rich_tui_action_row,
     rich_title_row,
+    rgb_target_label,
     rgb_to_hex,
+    save_tui_color_preset,
     textual_dependency_status,
+    tui_color_preset_payload,
+    tui_color_presets_dir,
     windows_colorref_to_hex,
 )
 
@@ -115,6 +123,53 @@ def test_rgb_theme_controls_scoped_targets_only():
     assert palette["shellBorder"] == "#6A6A6A"
     assert palette["rowHover"] == "#3A3A3A"
     assert palette["highlightText"] == "#B8B19C"
+
+
+def test_rgb_preset_folder_lives_inside_repo_workflow(tmp_path):
+    root_dir = tmp_path / "repo"
+
+    assert tui_color_presets_dir(root_dir=root_dir) == root_dir / "data" / "workflow" / "tui-color-presets"
+
+
+def test_rgb_preset_payload_saves_only_user_rgb_targets(tmp_path):
+    preset_path = tmp_path / "my-preset.json"
+    palette = clean_tui_palette(
+        {
+            "background": "#010203",
+            "panel": "#040506",
+            "menuLabelText": "#070809",
+            "shortcutText": "#FFFFFF",
+            "panelBorder": "#FFFFFF",
+        }
+    )
+
+    saved_path = save_tui_color_preset(palette, preset_path)
+    raw = json.loads(saved_path.read_text(encoding="utf-8"))
+    loaded = load_tui_color_preset(saved_path)
+
+    assert tuple(raw) == tuple(sorted(TUI_RGB_PRESET_KEYS))
+    assert raw == tui_color_preset_payload(palette)
+    assert loaded == {
+        "background": "#010203",
+        "panel": "#040506",
+        "menuLabelText": "#070809",
+    }
+    assert "shortcutText" not in raw
+    assert "panelBorder" not in raw
+
+
+def test_rgb_preset_rows_are_named_for_save_and_load():
+    assert rgb_target_label("savePreset") == "Save Preset"
+    assert rgb_target_label("loadPreset") == "Load Preset"
+
+
+def test_rgb_preset_save_path_stays_in_preset_folder(tmp_path):
+    preset_dir = tmp_path / "repo" / "data" / "workflow" / "tui-color-presets"
+    outside_choice = tmp_path / "Desktop" / "night"
+
+    path = keep_tui_preset_path_in_directory(outside_choice, preset_dir)
+
+    assert path == preset_dir / "night.json"
 
 
 def test_rgb_hex_helpers_clamp_and_parse():

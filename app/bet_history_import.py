@@ -56,6 +56,12 @@ _DECIMAL = re.compile(r"^\d{1,3}(?:,\d{3})*(?:\.\d+)?$")
 _INT = re.compile(r"^-?\d+$")
 _DATE = re.compile(r"^[A-Z][a-z]{2},\s+[A-Z][a-z]{2}\s+\d{1,2}", re.IGNORECASE)
 
+_MONTHS = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+DEFAULT_SEASON = 2025
+
 
 @dataclass
 class ParsedLeg:
@@ -281,3 +287,72 @@ def summarize(slips: list[ParsedSlip]) -> dict[str, Any]:
         "unsupportedLegs": total_legs - total_supported,
         "marketHitRates": market_rates,
     }
+
+
+def slate_date_for(date_text: str | None, season: int = DEFAULT_SEASON) -> str | None:
+    """Turn a Stake date line ("Thu, Apr 30 12:15 PM") into YYYY-MM-DD.
+
+    Stake omits the year, so the caller supplies the season it belongs to.
+    """
+    if not date_text:
+        return None
+    match = re.search(r"([A-Za-z]{3})\s+(\d{1,2})", str(date_text))
+    if not match:
+        return None
+    month = _MONTHS.get(match.group(1).lower())
+    if not month:
+        return None
+    return f"{int(season):04d}-{month:02d}-{int(match.group(2)):02d}"
+
+
+def load_folder(folder: str, *, season: int = DEFAULT_SEASON, ledger: Any = None) -> dict[str, Any]:
+    """Parse every .txt in a folder and load its slips into the pick ledger."""
+    from pathlib import Path
+
+    from .pick_ledger import PickLedger
+
+    ledger = ledger or PickLedger()
+    files = sorted(Path(folder).glob("*.txt"))
+    all_slips: list[ParsedSlip] = []
+    per_file: dict[str, int] = {}
+    for path in files:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        slips = parse_bet_history(text)
+        per_file[path.name] = len(slips)
+        all_slips.extend(slips)
+
+    report = summarize(all_slips)
+    loaded = ledger.record_imported_slips(all_slips, season=season)
+    return {
+        "folder": str(folder),
+        "season": season,
+        "filesRead": len(files),
+        "slipsPerFile": per_file,
+        "parsed": report,
+        "loaded": loaded,
+    }
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    import json
+
+    parser = argparse.ArgumentParser(
+        prog="oclay-bet-history",
+        description="Load pasted Stake 'My Bets' .txt exports into the pick ledger.",
+    )
+    parser.add_argument("folder", help="Folder containing the .txt exports.")
+    parser.add_argument(
+        "--season",
+        type=int,
+        default=DEFAULT_SEASON,
+        help=f"Season year the bets belong to (default: {DEFAULT_SEASON}).",
+    )
+    args = parser.parse_args(argv)
+    result = load_folder(args.folder, season=args.season)
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())

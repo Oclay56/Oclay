@@ -7,6 +7,7 @@ refit the per-market calibration that the probability engine consumes:
     python -m app.learning_cli calibrate
     python -m app.learning_cli loop --date 2026-05-08   # grade then calibrate
     python -m app.learning_cli summary
+    python -m app.learning_cli backtest                 # realized performance
 
 Intended to be scheduled (cron / Task Scheduler / Render cron) once a day.
 """
@@ -18,6 +19,7 @@ import asyncio
 import json
 from typing import Any
 
+from .backtest import run_backtest
 from .calibration import build_calibration_report
 from .correlation_calibration import build_correlation_estimates
 from .grading import grade_pending_picks
@@ -66,6 +68,7 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("calibrate", help="Refit calibration, market policy, and correlations.")
     sub.add_parser("summary", help="Print ledger accountability metrics.")
+    sub.add_parser("backtest", help="Replay settled history into a realized-performance report.")
 
     timing_cmd = sub.add_parser("timing", help="Print games due for snapshot/lineup rescan.")
     timing_cmd.add_argument("--date", default=None, help="Slate date YYYY-MM-DD.")
@@ -81,6 +84,8 @@ def main(argv: list[str] | None = None) -> int:
         result = _calibrate()
     elif args.command == "summary":
         result = PickLedger().summary()
+    elif args.command == "backtest":
+        result = run_backtest()
     elif args.command == "timing":
         result = asyncio.run(_timing(args.date))
     elif args.command == "loop":
