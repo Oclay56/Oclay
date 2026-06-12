@@ -1,11 +1,24 @@
 from __future__ import annotations
 
+import pytest
+
 from app.quote_model import (
     fit_quote_model,
+    invalidate_quote_model_cache,
     predict_sgm_quote,
     quote_observation,
     slip_projection,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_quote_model(monkeypatch):
+    # These are unit tests of the pure prior; keep them independent of whatever
+    # learned scalar the real local ledger happens to hold.
+    monkeypatch.setenv("OCLAY_DISABLE_QUOTE_MODEL", "1")
+    invalidate_quote_model_cache()
+    yield
+    invalidate_quote_model_cache()
 
 
 def _legs(*specs):

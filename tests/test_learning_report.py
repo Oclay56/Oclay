@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from rich.console import Console
 
-from app.learning_report import print_honesty_report, print_profitability_report
+from app.learning_report import (
+    print_honesty_report,
+    print_profitability_report,
+    print_trainer_report,
+)
 
 
 def _capture(fn, report) -> str:
@@ -56,6 +60,40 @@ def test_honesty_report_renders_verdict_and_curve():
     assert "HONEST" in text
     assert "Excellent" in text  # calibration error <= 2%
     assert "Reliability curve" in text
+
+
+def test_trainer_report_renders_grade_and_calibration():
+    report = {
+        "grade": {
+            "pendingConsidered": 12,
+            "graded": 9,
+            "skippedUnresolved": 3,
+            "outcomes": {"win": 6, "loss": 3, "push": 0, "void": 0},
+            "slips": {"slipsSettled": 2},
+            "slateDate": "2025-05-08",
+        },
+        "calibrate": {
+            "gradedSamples": 40,
+            "marketsCorrected": 5,
+            "killedMarkets": ["hits:under"],
+            "correlationCategoriesMeasured": 3,
+            "overall": {"count": 40, "brier": 0.19, "hitRate": 0.71},
+        },
+    }
+    text = _capture(print_trainer_report, report)
+    assert "TRAINER" in text
+    assert "Grading" in text
+    assert "Calibration" in text
+    assert "hits:under" in text  # killed market surfaced
+
+
+def test_trainer_report_handles_empty_run():
+    report = {
+        "grade": {"pendingConsidered": 1, "graded": 0, "skippedUnresolved": 1, "outcomes": {}, "slips": {}},
+        "calibrate": {"gradedSamples": 0, "marketsCorrected": 0, "correlationCategoriesMeasured": 3, "overall": {}},
+    }
+    text = _capture(print_trainer_report, report)
+    assert "Nothing new to grade" in text
 
 
 def test_honesty_report_handles_empty_history():

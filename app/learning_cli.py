@@ -113,6 +113,9 @@ def main(argv: list[str] | None = None) -> int:
 
     loop_cmd = sub.add_parser("loop", help="Grade then calibrate in one pass.")
     loop_cmd.add_argument("--date", default=None, help="Slate date YYYY-MM-DD.")
+    loop_cmd.add_argument(
+        "--pretty", action="store_true", help="Render a formatted report instead of JSON."
+    )
 
     args = parser.parse_args(argv)
 
@@ -146,9 +149,16 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "timing":
         result = asyncio.run(_timing(args.date))
     elif args.command == "loop":
+        if getattr(args, "pretty", False):
+            print("Running Trainer (grade + recalibrate)...\n", flush=True)
         graded = asyncio.run(_grade(args.date))
         calibrated = _calibrate()
         result = {"grade": graded, "calibrate": calibrated}
+        if getattr(args, "pretty", False):
+            from .learning_report import print_trainer_report
+
+            print_trainer_report(result)
+            return 0
     else:  # pragma: no cover - argparse enforces a valid command
         parser.error(f"unknown command {args.command}")
         return 2

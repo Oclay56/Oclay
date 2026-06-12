@@ -16,11 +16,11 @@ def _pct(value: Any) -> str:
     try:
         return f"{float(value) * 100:.1f}%"
     except (TypeError, ValueError):
-        return "—"
+        return "-"
 
 
 def _num(value: Any) -> str:
-    return "—" if value is None else str(value)
+    return "-" if value is None else str(value)
 
 
 def print_profitability_report(report: dict[str, Any], *, console: Console | None = None) -> None:
@@ -55,7 +55,7 @@ def print_profitability_report(report: dict[str, Any], *, console: Console | Non
             names = ", ".join(c["market"] for c in cold)
             console.print(f"\n[bold red]Cold markets (hit < 50% on real sample):[/] {names}")
     else:
-        console.print("[yellow]No graded legs yet — log live slips and let them settle.[/]")
+        console.print("[yellow]No graded legs yet - log live slips and let them settle.[/]")
 
     slip = report.get("slipPerformance", {})
     if slip.get("decidedSlips"):
@@ -85,6 +85,53 @@ def print_profitability_report(report: dict[str, Any], *, console: Console | Non
     console.print("\n[dim]Read-only report. Close this window whenever you're done.[/]")
 
 
+def print_trainer_report(report: dict[str, Any], *, console: Console | None = None) -> None:
+    console = console or Console()
+    console.rule("[bold magenta]TRAINER  -  Grade + Recalibrate")
+
+    grade = report.get("grade", {})
+    graded = grade.get("graded", 0) or 0
+    outcomes = grade.get("outcomes", {})
+    console.print(f"[bold]Grading[/]  (slate: {grade.get('slateDate') or 'all pending'})")
+    console.print(
+        f"  Considered: {_num(grade.get('pendingConsidered'))}   "
+        f"Graded: [bold]{graded}[/]   "
+        f"Not final yet: {_num(grade.get('skippedUnresolved'))}"
+    )
+    if graded:
+        console.print(
+            f"  Outcomes - [green]wins {outcomes.get('win', 0)}[/], "
+            f"[red]losses {outcomes.get('loss', 0)}[/], "
+            f"pushes {outcomes.get('push', 0)}, void {outcomes.get('void', 0)}"
+        )
+        console.print(f"  Slips settled: {grade.get('slips', {}).get('slipsSettled', 0)}")
+    else:
+        console.print("  [yellow]Nothing new to grade - normal until logged live slips finish.[/]")
+
+    cal = report.get("calibrate", {})
+    samples = cal.get("gradedSamples", 0) or 0
+    console.print("\n[bold]Calibration[/]")
+    console.print(f"  Model-scored graded samples: [bold]{samples}[/]")
+    console.print(f"  Markets re-corrected: {cal.get('marketsCorrected', 0)}")
+    console.print(f"  Correlation categories measured: {cal.get('correlationCategoriesMeasured', 0)}")
+    killed = cal.get("killedMarkets") or []
+    if killed:
+        console.print(f"  [bold red]Markets killed (negative realized ROI):[/] {', '.join(killed)}")
+    overall = cal.get("overall", {})
+    if overall.get("count"):
+        console.print(
+            f"  Overall - Brier {_num(overall.get('brier'))}, "
+            f"hit rate {_pct(overall.get('hitRate'))} over {overall.get('count')} samples"
+        )
+    if not samples:
+        console.print(
+            "  [dim]Platt calibration needs graded picks that carry a model probability; "
+            "it fills in as logged live slips settle.[/]"
+        )
+
+    console.print("\n[dim]Read-only report. Close this window whenever you're done.[/]")
+
+
 def print_honesty_report(report: dict[str, Any], *, console: Console | None = None) -> None:
     console = console or Console()
     console.rule("[bold cyan]HONEST  -  Model Calibration")
@@ -103,11 +150,11 @@ def print_honesty_report(report: dict[str, Any], *, console: Console | None = No
     err = report.get("calibrationError")
     err_pct = (err or 0) * 100
     if err_pct <= 2:
-        verdict = "[bold green]Excellent[/] — predictions match reality closely."
+        verdict = "[bold green]Excellent[/] - predictions match reality closely."
     elif err_pct <= 5:
-        verdict = "[bold yellow]Decent[/] — minor drift between predicted and actual."
+        verdict = "[bold yellow]Decent[/] - minor drift between predicted and actual."
     else:
-        verdict = "[bold red]Off[/] — the model is mis-stating probabilities; calibration will correct it over time."
+        verdict = "[bold red]Off[/] - the model is mis-stating probabilities; calibration will correct it over time."
 
     console.print(
         f"[bold]Predicted avg:[/] {_pct(report.get('meanPredicted'))}   "
@@ -132,7 +179,7 @@ def print_honesty_report(report: dict[str, Any], *, console: Console | None = No
                 style=style,
             )
         console.print(table)
-        console.print("[dim]Small-sample rows (<10 picks) are dimmed — trust the aggregate.[/]")
+        console.print("[dim]Small-sample rows (<10 picks) are dimmed - trust the aggregate.[/]")
 
     _print_coverage(report, console)
     console.print("\n[dim]Read-only report. Close this window whenever you're done.[/]")

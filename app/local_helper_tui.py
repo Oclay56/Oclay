@@ -108,6 +108,12 @@ TUI_ACTIONS: tuple[TuiAction, ...] = (
     TuiAction("exit", "Exit", "ctrl+e", "Close the TUI.", "exit", "Exiting"),
 )
 MENU_ROW_COUNT = len(TUI_ACTIONS)
+# Actions whose report opens in its own console window: id -> (cli command, status).
+REPORT_WINDOW_COMMANDS: dict[str, tuple[str, str]] = {
+    "trainer": ("loop", "training"),
+    "honest": ("model-backtest", "validating"),
+    "profitable": ("backtest", "backtesting"),
+}
 TUI_RGB_PRESET_KEYS = ("background", "panel", "menuLabelText")
 RGB_COLOR_TARGET_IDS = frozenset(TUI_RGB_PRESET_KEYS)
 RGB_PRESET_SAVE_ID = "savePreset"
@@ -1248,7 +1254,7 @@ if TEXTUAL_AVAILABLE:
             if action.action_id in {"review", "build"}:
                 self._start_helper_inline(action)
                 return
-            if action.action_id in {"honest", "profitable"}:
+            if action.action_id in REPORT_WINDOW_COMMANDS:
                 self._launch_report_window(action)
                 return
             if action.action_id == "clean":
@@ -1314,24 +1320,23 @@ if TEXTUAL_AVAILABLE:
                     pass
 
         def _launch_report_window(self, action: TuiAction) -> None:
-            """Open a Honest/Profitable report in its own full console window.
+            """Open a Trainer/Honest/Profitable report in its own console window.
 
             The TUI stays on the menu; only the status reflects that a report is
             running. The window is kept open (cmd /k) so the user reads it at
             full size and closes it whenever; status returns to ready then.
             """
-            status = "validating" if action.action_id == "honest" else "backtesting"
+            command, status = REPORT_WINDOW_COMMANDS[action.action_id]
             self._open_report_windows += 1
             self._active_action = None
             self.cli.status = status
             self._inline_message = f"{action.label} opened in a new window."
             self._refresh_layout(force=True)
             threading.Thread(
-                target=self._report_window_thread, args=(action, status), daemon=True
+                target=self._report_window_thread, args=(action, command, status), daemon=True
             ).start()
 
-        def _report_window_thread(self, action: TuiAction, status: str) -> None:
-            command = "model-backtest" if action.action_id == "honest" else "backtest"
+        def _report_window_thread(self, action: TuiAction, command: str, status: str) -> None:
             python_exe = self.root_dir / ".venv" / "Scripts" / "python.exe"
             new_console = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
             try:
@@ -1408,10 +1413,6 @@ if TEXTUAL_AVAILABLE:
                 self.cli.start_helper("review")
             elif action.action_id == "build":
                 self.cli.start_helper("build")
-            elif action.action_id == "trainer":
-                self.cli.status = "training"
-                code = self._run_module_command(["-m", "app.learning_cli", "loop"])
-                self.cli.status = "ready" if code == 0 else "training failed"
             elif action.action_id == "clean":
                 self.cli.status = "cleaning cache"
                 code = self._run_module_command(["-m", "app.supabase_cache", "--root-dir", str(self.root_dir)])
