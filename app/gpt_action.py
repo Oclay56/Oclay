@@ -2905,13 +2905,56 @@ def _record_slip_request_body() -> dict[str, Any]:
                         "legs": {
                             "type": "array",
                             "minItems": 1,
-                            "maxItems": 20,
+                            "maxItems": 75,
                             "description": (
                                 "The exact ranked-candidate objects the user chose, passed "
-                                "through verbatim (with rowId, player, market, side, line, odds, "
-                                "and probabilityAssessment) so each leg can grade and calibrate."
+                                "through verbatim so each leg can grade and calibrate. Include "
+                                "every leg of the slip."
                             ),
-                            "items": {"type": "object", "additionalProperties": True},
+                            "items": {
+                                "type": "object",
+                                "description": "One chosen leg, copied from the candidate row.",
+                                "properties": {
+                                    "rowId": {
+                                        "type": "string",
+                                        "description": "Stable Stake UI row id for the leg.",
+                                    },
+                                    "player": {"type": "string", "description": "Player name."},
+                                    "team": {"type": "string"},
+                                    "fixtureSlug": {
+                                        "type": "string",
+                                        "description": "Normalized game identity.",
+                                    },
+                                    "mlbPersonId": {
+                                        "type": "integer",
+                                        "description": "MLB person id; lets the leg grade by id.",
+                                    },
+                                    "normalizedMarketKey": {
+                                        "type": "string",
+                                        "description": "Internal market key, e.g. total_bases, rbi, home_runs.",
+                                    },
+                                    "side": {
+                                        "type": "string",
+                                        "enum": ["over", "under"],
+                                    },
+                                    "line": {"type": "number"},
+                                    "odds": {"type": "number"},
+                                    "probabilityAssessment": {
+                                        "type": "object",
+                                        "description": "The leg's scored probability block, verbatim.",
+                                        "properties": {
+                                            "estimatedProbability": {"type": "number"},
+                                            "fairProbability": {"type": "number"},
+                                            "impliedProbability": {"type": "number"},
+                                            "edge": {"type": "number"},
+                                            "edgeStatus": {"type": "string"},
+                                        },
+                                        "additionalProperties": True,
+                                    },
+                                },
+                                "required": ["player", "side", "line"],
+                                "additionalProperties": True,
+                            },
                         },
                     },
                     "required": ["legs"],
