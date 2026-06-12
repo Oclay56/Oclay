@@ -31,7 +31,7 @@ async def backfill_person_ids(
     unresolved: list[str] = []
 
     for name in names:
-        person_id = await _resolve(engine, name)
+        person_id = await resolve_person_id(engine, name)
         if person_id is None:
             unresolved.append(name)
             continue
@@ -50,7 +50,8 @@ async def backfill_person_ids(
     }
 
 
-async def _resolve(engine: Any, name: str) -> int | None:
+async def resolve_person_id(engine: Any, name: str) -> int | None:
+    """Resolve a player name to its MLB id, or None if not confidently matched."""
     key = slug_key(name)
     try:
         found = await engine.search_players(name, limit=5)

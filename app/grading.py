@@ -16,7 +16,9 @@ from __future__ import annotations
 from typing import Any
 
 from .mlb_bridge import stat_mapping_for_market, stat_value_from_stats
+from .mlb_props import slug_key
 from .pick_ledger import GRADE_LOSS, GRADE_PUSH, GRADE_VOID, GRADE_WIN, PickLedger
+from .player_backfill import resolve_person_id
 
 
 async def grade_pending_picks(
@@ -38,6 +40,7 @@ async def grade_pending_picks(
     skipped = 0
     outcomes: dict[str, int] = {GRADE_WIN: 0, GRADE_LOSS: 0, GRADE_PUSH: 0, GRADE_VOID: 0}
     game_log_cache: dict[tuple[int, str, int | None], dict[str, Any]] = {}
+    person_cache: dict[str, int | None] = {}
 
     for pick in pending:
         result = await _grade_one(
@@ -45,6 +48,7 @@ async def grade_pending_picks(
             pick,
             history_limit=history_limit,
             game_log_cache=game_log_cache,
+            person_cache=person_cache,
         )
         if result is None:
             skipped += 1
@@ -71,12 +75,21 @@ async def _grade_one(
     *,
     history_limit: int,
     game_log_cache: dict[tuple[int, str, int | None], dict[str, Any]],
+    person_cache: dict[str, int | None] | None = None,
 ) -> tuple[str, float | None] | None:
-    person_id = _int_or_none(pick.get("mlb_person_id"))
     line = _float_or_none(pick.get("line"))
     side = str(pick.get("side") or "").lower()
     slate_date = str(pick.get("slate_date") or "")
-    if person_id is None or line is None or side not in {"over", "under"} or not slate_date:
+    if line is None or side not in {"over", "under"} or not slate_date:
+        return None
+
+    person_id = _int_or_none(pick.get("mlb_person_id"))
+    if person_id is None:
+        # Backup only: a logged leg that arrived without its MLB id (e.g. the
+        # GPT omitted it) is resolved from the player name. This never runs on
+        # the normal path -- a pick that already has its id skips this entirely.
+        person_id = await _resolve_person_id_by_name(engine, pick.get("player"), person_cache)
+    if person_id is None:
         return None
 
     mapping = stat_mapping_for_market(str(pick.get("market_key") or ""))
@@ -109,6 +122,27 @@ async def _grade_one(
         return None
 
     return _settle(actual, line, side), actual
+
+
+async def _resolve_person_id_by_name(
+    engine: Any,
+    name: Any,
+    person_cache: dict[str, int | None] | None,
+) -> int | None:
+    """Best-effort name -> MLB id, cached per run. Never raises into grading."""
+    clean = str(name or "").strip()
+    if not clean:
+        return None
+    key = slug_key(clean)
+    if person_cache is not None and key in person_cache:
+        return person_cache[key]
+    try:
+        person_id = await resolve_person_id(engine, clean)
+    except Exception:
+        person_id = None
+    if person_cache is not None:
+        person_cache[key] = person_id
+    return person_id
 
 
 def _settle(actual: float, line: float, side: str) -> str:
