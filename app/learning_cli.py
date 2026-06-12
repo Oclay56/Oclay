@@ -23,6 +23,7 @@ from .backtest import run_backtest
 from .backtest_model import run_model_backtest
 from .calibration import build_calibration_report
 from .correlation_calibration import build_correlation_estimates
+from .player_backfill import backfill_person_ids
 from .grading import grade_pending_picks
 from .mlb_data import MLBDataEngine, MLBStatsClient, build_mlb_http_client
 from .pick_ledger import PickLedger
@@ -42,6 +43,13 @@ async def _model_backtest(min_prior_games: int) -> dict[str, Any]:
     async with build_mlb_http_client() as http_client:
         engine = MLBDataEngine(MLBStatsClient(http_client))
         return await run_model_backtest(engine, ledger=ledger, min_prior_games=min_prior_games)
+
+
+async def _backfill_ids() -> dict[str, Any]:
+    ledger = PickLedger()
+    async with build_mlb_http_client() as http_client:
+        engine = MLBDataEngine(MLBStatsClient(http_client))
+        return await backfill_person_ids(engine, ledger=ledger)
 
 
 async def _timing(slate_date: str | None) -> dict[str, Any]:
@@ -87,6 +95,10 @@ def main(argv: list[str] | None = None) -> int:
         default=3,
         help="Minimum pre-slate games required to score a pick (default: 3).",
     )
+    sub.add_parser(
+        "backfill-ids",
+        help="Resolve MLB ids for id-less picks (imported history) so validation is fast.",
+    )
 
     timing_cmd = sub.add_parser("timing", help="Print games due for snapshot/lineup rescan.")
     timing_cmd.add_argument("--date", default=None, help="Slate date YYYY-MM-DD.")
@@ -106,6 +118,8 @@ def main(argv: list[str] | None = None) -> int:
         result = run_backtest()
     elif args.command == "model-backtest":
         result = asyncio.run(_model_backtest(args.min_prior_games))
+    elif args.command == "backfill-ids":
+        result = asyncio.run(_backfill_ids())
     elif args.command == "timing":
         result = asyncio.run(_timing(args.date))
     elif args.command == "loop":

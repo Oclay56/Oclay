@@ -458,6 +458,34 @@ class PickLedger:
         with self._connect() as conn:
             return [dict(row) for row in conn.execute(query, params).fetchall()]
 
+    def players_missing_person_id(self) -> list[str]:
+        """Distinct player names on picks that have no MLB id yet.
+
+        Imported history loads without ids (Stake exports omit them); resolving
+        them once lets model validation skip a name search per player.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT player FROM picks
+                WHERE mlb_person_id IS NULL AND player IS NOT NULL AND player != ''
+                """
+            ).fetchall()
+        return [str(row["player"]) for row in rows]
+
+    def set_person_id_for_player(self, player: str, person_id: int) -> int:
+        """Stamp a resolved MLB id onto every id-less pick for that player."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE picks SET mlb_person_id = ?
+                WHERE player = ? AND mlb_person_id IS NULL
+                """,
+                (int(person_id), player),
+            )
+            conn.commit()
+        return cur.rowcount
+
     def settled_picks(self) -> list[dict[str, Any]]:
         """Every pick settled to win/loss/push, regardless of model scoring.
 
