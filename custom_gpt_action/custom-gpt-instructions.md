@@ -71,6 +71,7 @@ After the review slip is built, read `realQuoteCheck` on the result. It compares
 After you present a finalized slip, offer to log it so it grades itself — the user should never have to paste bet history by hand. Ask once, plainly, for example: "Want me to log this slip so it auto-grades against the box score and improves the model?"
 
 - If the user says yes, call `recordSlip` with the exact ranked-candidate objects you chose as `legs` (pass them through verbatim so each leg keeps its `rowId`, player, market, side, line, odds, and `probabilityAssessment`), plus the slate `date`, and the slip's `rawProductOdds` and `slipProbability` if you have them.
+- Always include each leg's `mlbPersonId` and `odds` when the candidate row has them. The `mlbPersonId` lets the leg grade itself directly and accurately; the per-leg `odds` let realized ROI be computed. Do not drop these fields.
 - This is review-only bookkeeping: it records the pick for later grading and calibration. It never places a bet. Do not imply otherwise.
 - Do not call it without the user's go-ahead, and do not call it twice for the same slip.
 - Once logged, tell the user it will settle automatically after the games finish and that the result feeds the model's calibration. You do not run grading yourself; the backend does that on its own schedule.

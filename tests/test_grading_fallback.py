@@ -55,6 +55,23 @@ def test_pick_without_id_still_grades_via_name(tmp_path):
     assert engine.search_calls == 1  # the backup fired
 
 
+def test_resolved_id_is_saved_back_so_it_is_one_time(tmp_path):
+    ledger = PickLedger(db_path=tmp_path / "l.sqlite")
+    _pending_pick(ledger, row_id="row-1", player="Some Player", with_id=False)
+    engine = FakeEngine(name_to_id={"Some Player": 555})
+
+    asyncio.run(grade_pending_picks(engine, ledger=ledger, slate_date=SLATE))
+
+    # The resolved id is now stored on the pick, so it never needs a lookup again.
+    import sqlite3
+
+    conn = sqlite3.connect(ledger.db_path)
+    row = conn.execute(
+        "SELECT mlb_person_id FROM picks WHERE player = ?", ("Some Player",)
+    ).fetchone()
+    assert row[0] == 555
+
+
 def test_normal_path_with_id_never_calls_name_search(tmp_path):
     ledger = PickLedger(db_path=tmp_path / "l.sqlite")
     _pending_pick(ledger, row_id="row-2", player="Some Player", with_id=True)

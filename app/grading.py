@@ -49,6 +49,7 @@ async def grade_pending_picks(
             history_limit=history_limit,
             game_log_cache=game_log_cache,
             person_cache=person_cache,
+            ledger=ledger,
         )
         if result is None:
             skipped += 1
@@ -76,6 +77,7 @@ async def _grade_one(
     history_limit: int,
     game_log_cache: dict[tuple[int, str, int | None], dict[str, Any]],
     person_cache: dict[str, int | None] | None = None,
+    ledger: PickLedger | None = None,
 ) -> tuple[str, float | None] | None:
     line = _float_or_none(pick.get("line"))
     side = str(pick.get("side") or "").lower()
@@ -89,6 +91,13 @@ async def _grade_one(
         # GPT omitted it) is resolved from the player name. This never runs on
         # the normal path -- a pick that already has its id skips this entirely.
         person_id = await _resolve_person_id_by_name(engine, pick.get("player"), person_cache)
+        # Save the resolved id back so this leg (and others for the same player)
+        # never needs a name lookup again -- the chore becomes one-time.
+        if person_id is not None and ledger is not None and pick.get("player"):
+            try:
+                ledger.set_person_id_for_player(str(pick["player"]), person_id)
+            except Exception:
+                pass
     if person_id is None:
         return None
 
