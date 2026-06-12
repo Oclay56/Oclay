@@ -875,6 +875,7 @@ if TEXTUAL_AVAILABLE:
             self._output_scroll = 0
             self._page_result = ""
             self._last_pointer_action: tuple[str, float] = ("", 0.0)
+            self._open_report_windows = 0
 
         def compose(self) -> ComposeResult:
             yield Static("", id="workspace-top")
@@ -1247,6 +1248,9 @@ if TEXTUAL_AVAILABLE:
             if action.action_id in {"review", "build"}:
                 self._start_helper_inline(action)
                 return
+            if action.action_id in {"honest", "profitable"}:
+                self._launch_report_window(action)
+                return
             if action.action_id == "clean":
                 self._start_clean_inline(action)
                 return
@@ -1304,6 +1308,46 @@ if TEXTUAL_AVAILABLE:
             finally:
                 self._busy = False
                 self._active_subprocess = None
+                try:
+                    self.call_from_thread(self._refresh_layout, force=True)
+                except RuntimeError:
+                    pass
+
+        def _launch_report_window(self, action: TuiAction) -> None:
+            """Open a Honest/Profitable report in its own full console window.
+
+            The TUI stays on the menu; only the status reflects that a report is
+            running. The window is kept open (cmd /k) so the user reads it at
+            full size and closes it whenever; status returns to ready then.
+            """
+            status = "validating" if action.action_id == "honest" else "backtesting"
+            self._open_report_windows += 1
+            self._active_action = None
+            self.cli.status = status
+            self._inline_message = f"{action.label} opened in a new window."
+            self._refresh_layout(force=True)
+            threading.Thread(
+                target=self._report_window_thread, args=(action, status), daemon=True
+            ).start()
+
+        def _report_window_thread(self, action: TuiAction, status: str) -> None:
+            command = "model-backtest" if action.action_id == "honest" else "backtest"
+            python_exe = self.root_dir / ".venv" / "Scripts" / "python.exe"
+            new_console = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+            try:
+                process = subprocess.Popen(
+                    ["cmd", "/k", str(python_exe), "-m", "app.learning_cli", command, "--pretty"],
+                    cwd=str(self.root_dir),
+                    creationflags=new_console,
+                )
+                process.wait()
+            except Exception as exc:  # pragma: no cover - defensive UI boundary.
+                self._inline_message = f"{action.label} could not open: {exc}"
+            finally:
+                self._open_report_windows = max(0, self._open_report_windows - 1)
+                if self._open_report_windows == 0 and self.cli.status == status:
+                    self.cli.status = "ready"
+                self._inline_message = f"{action.label}: done."
                 try:
                     self.call_from_thread(self._refresh_layout, force=True)
                 except RuntimeError:
@@ -1368,14 +1412,6 @@ if TEXTUAL_AVAILABLE:
                 self.cli.status = "training"
                 code = self._run_module_command(["-m", "app.learning_cli", "loop"])
                 self.cli.status = "ready" if code == 0 else "training failed"
-            elif action.action_id == "honest":
-                self.cli.status = "validating"
-                code = self._run_module_command(["-m", "app.learning_cli", "model-backtest"])
-                self.cli.status = "ready" if code == 0 else "validation failed"
-            elif action.action_id == "profitable":
-                self.cli.status = "backtesting"
-                code = self._run_module_command(["-m", "app.learning_cli", "backtest"])
-                self.cli.status = "ready" if code == 0 else "backtest failed"
             elif action.action_id == "clean":
                 self.cli.status = "cleaning cache"
                 code = self._run_module_command(["-m", "app.supabase_cache", "--root-dir", str(self.root_dir)])

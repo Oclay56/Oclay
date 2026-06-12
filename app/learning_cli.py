@@ -84,7 +84,12 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("calibrate", help="Refit calibration, market policy, and correlations.")
     sub.add_parser("summary", help="Print ledger accountability metrics.")
-    sub.add_parser("backtest", help="Replay settled history into a realized-performance report.")
+    backtest_cmd = sub.add_parser(
+        "backtest", help="Replay settled history into a realized-performance report."
+    )
+    backtest_cmd.add_argument(
+        "--pretty", action="store_true", help="Render a formatted report instead of JSON."
+    )
     model_cmd = sub.add_parser(
         "model-backtest",
         help="Re-score settled picks point-in-time and grade model calibration (uses MLB API).",
@@ -94,6 +99,9 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         default=3,
         help="Minimum pre-slate games required to score a pick (default: 3).",
+    )
+    model_cmd.add_argument(
+        "--pretty", action="store_true", help="Render a formatted report instead of JSON."
     )
     sub.add_parser(
         "backfill-ids",
@@ -115,8 +123,23 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "summary":
         result = PickLedger().summary()
     elif args.command == "backtest":
+        if getattr(args, "pretty", False):
+            print("Running Profitable (realized backtest)...\n", flush=True)
+            from .learning_report import print_profitability_report
+
+            print_profitability_report(run_backtest())
+            return 0
         result = run_backtest()
     elif args.command == "model-backtest":
+        if getattr(args, "pretty", False):
+            print(
+                "Running Honest (point-in-time model validation)... fetching MLB game logs, ~30s\n",
+                flush=True,
+            )
+            from .learning_report import print_honesty_report
+
+            print_honesty_report(asyncio.run(_model_backtest(args.min_prior_games)))
+            return 0
         result = asyncio.run(_model_backtest(args.min_prior_games))
     elif args.command == "backfill-ids":
         result = asyncio.run(_backfill_ids())
