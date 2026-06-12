@@ -218,6 +218,10 @@ class PickLedger:
                     continue
                 slate_date = slate_date_for(getattr(slip, "date_text", None), season)
                 matchup = getattr(slip, "matchup", None)
+                # A fixture slug derived from the matchup lets the correlation
+                # engine group this slip's legs as one game and measure real
+                # same-game co-hit rates from your own SGM history.
+                fixture_slug = slug_key(matchup) if matchup else None
                 signature = "|".join(
                     sorted(
                         f"{leg.player}:{leg.market_key}:{leg.side}:{leg.line}"
@@ -245,7 +249,7 @@ class PickLedger:
                             implied_probability, fair_probability, estimated_probability, edge,
                             edge_status, score, reliability_band, recorded_at,
                             graded_at, outcome, actual_value, closing_odds, clv
-                        ) VALUES (?, ?, ?, ?, NULL, ?, NULL, NULL, ?, NULL, ?, ?, ?, NULL,
+                        ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, ?, ?, ?, NULL,
                                   NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, ?, NULL, NULL)
                         ON CONFLICT(pick_key) DO NOTHING
                         """,
@@ -254,6 +258,7 @@ class PickLedger:
                             slip_id,
                             slate_date,
                             "imported_history",
+                            fixture_slug,
                             matchup,
                             leg.player,
                             leg.market_key,
