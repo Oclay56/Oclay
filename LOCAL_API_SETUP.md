@@ -49,9 +49,14 @@ tunnel.)
 
 ## Every day
 
-- Just run **`Oclay_API.bat`** and keep the two windows open while you use the GPT,
-  alongside the normal Oclay TUI (`Oclay.bat`) for board scraping. With the ngrok
-  domain set, there's nothing to copy or repaste.
+- Just run **`Oclay.bat`**. It now starts the local API and the tunnel
+  automatically (minimized in the taskbar) alongside the TUI. When you **close the
+  TUI window, the API and tunnel shut down with it.** With the ngrok domain set,
+  there's nothing to copy or repaste — one launcher, done.
+- `Oclay_API.bat` still exists if you ever want to run the API + tunnel on their
+  own without the TUI.
+- First-time only: if you haven't set the ngrok domain yet, restore the minimized
+  **Oclay Tunnel** window from the taskbar to copy the temporary URL.
 
 ## Render
 

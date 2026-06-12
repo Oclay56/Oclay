@@ -42,6 +42,7 @@ if not exist "%POWERSHELL_EXE%" (
   exit /b 1
 )
 
-set "OCLAY_ROOT=%CD%"
-start "Oclay TUI" "%POWERSHELL_EXE%" -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$Host.UI.RawUI.WindowTitle='Oclay TUI'; $Host.UI.RawUI.BackgroundColor='Black'; $Host.UI.RawUI.ForegroundColor='DarkGray'; Clear-Host; $root=$env:OCLAY_ROOT; Set-Location -LiteralPath $root; & '.\.venv\Scripts\python.exe' -m app.local_helper_tui; $code=$LASTEXITCODE; if ($code -ne 0) { Write-Host ''; Write-Host ('Oclay TUI exited with code {0}.' -f $code); Read-Host 'Press Enter to close' }; exit $code"
+rem Launch the supervisor: it brings up the local API + tunnel (minimized) and the
+rem TUI together, and shuts the API + tunnel down when the TUI window is closed.
+start "Oclay" /min "%POWERSHELL_EXE%" -NoLogo -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0start-oclay-all.ps1"
 exit /b 0
