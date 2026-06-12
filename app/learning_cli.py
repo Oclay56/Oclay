@@ -20,7 +20,9 @@ import json
 from typing import Any
 
 from .backtest import run_backtest
+from .backtest_model import run_model_backtest
 from .calibration import build_calibration_report
+from .clv import clv_report
 from .correlation_calibration import build_correlation_estimates
 from .grading import grade_pending_picks
 from .mlb_data import MLBDataEngine, MLBStatsClient, build_mlb_http_client
@@ -34,6 +36,13 @@ async def _grade(slate_date: str | None) -> dict[str, Any]:
     async with build_mlb_http_client() as http_client:
         engine = MLBDataEngine(MLBStatsClient(http_client))
         return await grade_pending_picks(engine, ledger=ledger, slate_date=slate_date)
+
+
+async def _model_backtest(min_prior_games: int) -> dict[str, Any]:
+    ledger = PickLedger()
+    async with build_mlb_http_client() as http_client:
+        engine = MLBDataEngine(MLBStatsClient(http_client))
+        return await run_model_backtest(engine, ledger=ledger, min_prior_games=min_prior_games)
 
 
 async def _timing(slate_date: str | None) -> dict[str, Any]:
@@ -69,6 +78,17 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("calibrate", help="Refit calibration, market policy, and correlations.")
     sub.add_parser("summary", help="Print ledger accountability metrics.")
     sub.add_parser("backtest", help="Replay settled history into a realized-performance report.")
+    sub.add_parser("clv", help="Closing-line-value report over picks with a captured close.")
+    model_cmd = sub.add_parser(
+        "model-backtest",
+        help="Re-score settled picks point-in-time and grade model calibration (uses MLB API).",
+    )
+    model_cmd.add_argument(
+        "--min-prior-games",
+        type=int,
+        default=3,
+        help="Minimum pre-slate games required to score a pick (default: 3).",
+    )
 
     timing_cmd = sub.add_parser("timing", help="Print games due for snapshot/lineup rescan.")
     timing_cmd.add_argument("--date", default=None, help="Slate date YYYY-MM-DD.")
@@ -86,6 +106,10 @@ def main(argv: list[str] | None = None) -> int:
         result = PickLedger().summary()
     elif args.command == "backtest":
         result = run_backtest()
+    elif args.command == "clv":
+        result = clv_report()
+    elif args.command == "model-backtest":
+        result = asyncio.run(_model_backtest(args.min_prior_games))
     elif args.command == "timing":
         result = asyncio.run(_timing(args.date))
     elif args.command == "loop":

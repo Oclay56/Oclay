@@ -363,6 +363,57 @@ class PickLedger:
             conn.commit()
         return {"closingSnapshotsApplied": updated}
 
+    def update_closing_odds(
+        self,
+        snapshots: Iterable[dict[str, Any]],
+        *,
+        recorded_before: str | None = None,
+    ) -> dict[str, Any]:
+        """Capture the latest seen odds as the closing line for prior picks.
+
+        Called on a board re-scan: any pending pick whose row was first
+        recorded on an *earlier* scan (``recorded_at < recorded_before``) has
+        its ``closing_odds`` overwritten with the freshly seen odds, so the
+        last price observed before grading becomes the closing line. Brand-new
+        rows from this same scan are excluded (their open price is not a close).
+        """
+        updated = 0
+        with self._connect() as conn:
+            for snap in snapshots:
+                row_id = snap.get("rowId") or snap.get("row_id")
+                closing = _float_or_none(snap.get("odds") or snap.get("closingOdds"))
+                if not row_id or closing is None or closing <= 1.0:
+                    continue
+                if recorded_before is not None:
+                    cur = conn.execute(
+                        """
+                        UPDATE picks SET closing_odds = ?
+                        WHERE row_id = ? AND outcome = ? AND recorded_at < ?
+                        """,
+                        (closing, row_id, PENDING, recorded_before),
+                    )
+                else:
+                    cur = conn.execute(
+                        """
+                        UPDATE picks SET closing_odds = ?
+                        WHERE row_id = ? AND outcome = ?
+                        """,
+                        (closing, row_id, PENDING),
+                    )
+                updated += cur.rowcount
+            conn.commit()
+        return {"closingOddsUpdated": updated}
+
+    def picks_with_closing(self) -> list[dict[str, Any]]:
+        """Picks that have a captured closing line, for CLV analysis."""
+        with self._connect() as conn:
+            return [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT * FROM picks WHERE closing_odds IS NOT NULL AND odds IS NOT NULL"
+                ).fetchall()
+            ]
+
     # ------------------------------------------------------------------
     # Grading
     # ------------------------------------------------------------------
