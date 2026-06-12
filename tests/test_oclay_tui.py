@@ -35,6 +35,8 @@ def test_oclay_tui_exposes_rgb_action_not_palette():
         "review",
         "build",
         "trainer",
+        "honest",
+        "profitable",
         "clean",
         "domain",
         "rgb",
@@ -47,6 +49,12 @@ def test_oclay_tui_exposes_rgb_action_not_palette():
     assert trainer.label == "Trainer"
     assert trainer.shortcut == "ctrl+t"
     assert trainer.command == "trainer"
+    honest = next(action for action in actions if action.action_id == "honest")
+    assert honest.label == "Honest"
+    assert honest.shortcut == "ctrl+h"
+    profitable = next(action for action in actions if action.action_id == "profitable")
+    assert profitable.label == "Profitable"
+    assert profitable.shortcut == "ctrl+p"
     assert all(action.label != "Palette" for action in actions)
     assert all("Historic" not in action.label for action in actions)
     assert all("M/L" not in action.label for action in actions)
@@ -80,7 +88,7 @@ def test_oclay_branding_uses_display_name():
 
 
 def test_oclay_footer_cushion_keeps_footer_lifted():
-    assert MENU_FOOTER_CUSHION_HEIGHT == 5
+    assert MENU_FOOTER_CUSHION_HEIGHT == 3
 
 
 def test_textual_dependency_probe_shape():

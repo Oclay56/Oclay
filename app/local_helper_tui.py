@@ -77,7 +77,7 @@ TITLE_ROW_WIDTH = 106
 OUTPUT_PANEL_WIDTH = 104
 OUTPUT_VISIBLE_HEIGHT = 7
 OUTPUT_TEXT_WIDTH = 98
-MENU_FOOTER_CUSHION_HEIGHT = 5
+MENU_FOOTER_CUSHION_HEIGHT = 3
 ENABLE_MOUSE_INPUT = 0x0010
 ENABLE_QUICK_EDIT_MODE = 0x0040
 ENABLE_EXTENDED_FLAGS = 0x0080
@@ -99,6 +99,8 @@ TUI_ACTIONS: tuple[TuiAction, ...] = (
     TuiAction("review", "Review", "ctrl+r", "Review the visible Stake board.", "review", "Reviewing"),
     TuiAction("build", "Build", "ctrl+b", "Open builder mode for validated slips.", "build", "Building"),
     TuiAction("trainer", "Trainer", "ctrl+t", "Grade settled picks and recalibrate the model.", "trainer", "Training"),
+    TuiAction("honest", "Honest", "ctrl+h", "Is the model honest? Point-in-time calibration check.", "honest", "Validating"),
+    TuiAction("profitable", "Profitable", "ctrl+p", "Is it profitable? Realized hit rate and slip ROI.", "profitable", "Backtesting"),
     TuiAction("clean", "Clean", "ctrl+c", "Clear rebuildable cache.", "clean", "Cleaning"),
     TuiAction("domain", "Domain", "ctrl+q", "Toggle Stake domain profile.", "domain", "Switching domain"),
     TuiAction("rgb", "RGB", "ctrl+g", "Tune TUI background colors.", "rgb", "RGB"),
@@ -828,6 +830,8 @@ if TEXTUAL_AVAILABLE:
             ("ctrl+r", "run_action('review')", "Review"),
             ("ctrl+b", "run_action('build')", "Build"),
             ("ctrl+t", "run_action('trainer')", "Trainer"),
+            ("ctrl+h", "run_action('honest')", "Honest"),
+            ("ctrl+p", "run_action('profitable')", "Profitable"),
             ("ctrl+c", "run_action('clean')", "Clean"),
             ("ctrl+q", "run_action('domain')", "Domain"),
             ("ctrl+g", "run_action('rgb')", "RGB"),
@@ -836,6 +840,8 @@ if TEXTUAL_AVAILABLE:
             ("r", "run_action('review')", "Review"),
             ("b", "run_action('build')", "Build"),
             ("t", "run_action('trainer')", "Trainer"),
+            ("h", "run_action('honest')", "Honest"),
+            ("p", "run_action('profitable')", "Profitable"),
             ("c", "run_action('clean')", "Clean"),
             ("q", "run_action('domain')", "Domain"),
             ("g", "run_action('rgb')", "RGB"),
@@ -985,7 +991,7 @@ if TEXTUAL_AVAILABLE:
             if self._setup_state == "stopping":
                 return "stopping"
             cli_status = str(self.cli.status or "ready").strip().lower()
-            if cli_status in {"building", "reviewing", "cleaning cache", "analyzing", "training"}:
+            if cli_status in {"building", "reviewing", "cleaning cache", "analyzing", "training", "validating", "backtesting"}:
                 return cli_status
             if self._busy and self._active_action is not None:
                 return self._active_action.running_label.lower()
@@ -1362,6 +1368,14 @@ if TEXTUAL_AVAILABLE:
                 self.cli.status = "training"
                 code = self._run_module_command(["-m", "app.learning_cli", "loop"])
                 self.cli.status = "ready" if code == 0 else "training failed"
+            elif action.action_id == "honest":
+                self.cli.status = "validating"
+                code = self._run_module_command(["-m", "app.learning_cli", "model-backtest"])
+                self.cli.status = "ready" if code == 0 else "validation failed"
+            elif action.action_id == "profitable":
+                self.cli.status = "backtesting"
+                code = self._run_module_command(["-m", "app.learning_cli", "backtest"])
+                self.cli.status = "ready" if code == 0 else "backtest failed"
             elif action.action_id == "clean":
                 self.cli.status = "cleaning cache"
                 code = self._run_module_command(["-m", "app.supabase_cache", "--root-dir", str(self.root_dir)])
