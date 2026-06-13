@@ -64,8 +64,18 @@ class PickLedger:
         run_id = run_id or _new_id("run")
         mode = str(pool.get("mode") or "best_available")
         date = slate_date or pool.get("date")
-        namespace = str(date) if date else run_id
         rows = [row for row in (pool.get("rankedCandidates") or []) if isinstance(row, dict)]
+        if not date:
+            # A capture with no slate date can never be graded -- the grader needs
+            # a date to find the game -- so persisting it would only pile up
+            # permanent ungradeable "incomplete pick data" clutter. Skip it.
+            return {
+                "runId": run_id,
+                "picksRecorded": 0,
+                "candidateCount": len(rows),
+                "skipped": "no_slate_date",
+            }
+        namespace = str(date)
         recorded = 0
         now = _utc_now()
         with self._connect() as conn:
