@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import threading
 import time
@@ -1323,8 +1324,8 @@ if TEXTUAL_AVAILABLE:
             """Open a Trainer/Honest/Profitable report in its own console window.
 
             The TUI stays on the menu; only the status reflects that a report is
-            running. The window is kept open (cmd /k) so the user reads it at
-            full size and closes it whenever; status returns to ready then.
+            running. The window is kept open so the user reads it at full size
+            and closes it whenever; status returns to ready then.
             """
             command, status = REPORT_WINDOW_COMMANDS[action.action_id]
             self._open_report_windows += 1
@@ -1339,11 +1340,21 @@ if TEXTUAL_AVAILABLE:
         def _report_window_thread(self, action: TuiAction, command: str, status: str) -> None:
             python_exe = self.root_dir / ".venv" / "Scripts" / "python.exe"
             new_console = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+            env = {**os.environ, "PYTHONUTF8": "1"}
+            # Prefer PowerShell 7 (UTF-8 + rich rendering); -NoExit keeps the
+            # window open to read. Fall back to cmd /k where pwsh is absent.
+            pwsh = shutil.which("pwsh")
+            if pwsh:
+                inner = f"& '{python_exe}' -m app.learning_cli {command} --pretty"
+                args = [pwsh, "-NoExit", "-NoLogo", "-NoProfile", "-Command", inner]
+            else:
+                args = ["cmd", "/k", str(python_exe), "-m", "app.learning_cli", command, "--pretty"]
             try:
                 process = subprocess.Popen(
-                    ["cmd", "/k", str(python_exe), "-m", "app.learning_cli", command, "--pretty"],
+                    args,
                     cwd=str(self.root_dir),
                     creationflags=new_console,
+                    env=env,
                 )
                 process.wait()
             except Exception as exc:  # pragma: no cover - defensive UI boundary.

@@ -3,7 +3,13 @@
 # (Oclay.bat) bring the whole local stack up and down together.
 $ErrorActionPreference = 'SilentlyContinue'
 Set-Location -LiteralPath $PSScriptRoot
-$ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+
+# UTF-8 for every child process so the rich reports render cleanly.
+$env:PYTHONUTF8 = '1'
+
+# Prefer PowerShell 7 (pwsh) for the child windows; fall back to 5.1.
+$ps = (Get-Command pwsh.exe -ErrorAction SilentlyContinue).Source
+if (-not $ps) { $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe' }
 $common = @('-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass')
 
 # Background services, minimized so only the TUI is in the foreground. They stay

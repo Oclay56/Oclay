@@ -33,10 +33,11 @@ if not exist ".env" (
   exit /b 1
 )
 
-set "POWERSHELL_EXE=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
-if not exist "%POWERSHELL_EXE%" (
-  echo ERROR: Could not find Windows PowerShell.
-  echo Expected: %POWERSHELL_EXE%
+rem Prefer PowerShell 7 (pwsh, UTF-8 + modern rendering); fall back to 5.1.
+set "PS_EXE=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
+where pwsh.exe >nul 2>nul && set "PS_EXE=pwsh.exe"
+if not exist "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" if "%PS_EXE%"=="%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" (
+  echo ERROR: Could not find PowerShell.
   echo.
   pause
   exit /b 1
@@ -44,5 +45,5 @@ if not exist "%POWERSHELL_EXE%" (
 
 rem Launch the supervisor: it brings up the local API + tunnel (minimized) and the
 rem TUI together, and shuts the API + tunnel down when the TUI window is closed.
-start "Oclay" /min "%POWERSHELL_EXE%" -NoLogo -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0start-oclay-all.ps1"
+start "Oclay" /min "%PS_EXE%" -NoLogo -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0start-oclay-all.ps1"
 exit /b 0
