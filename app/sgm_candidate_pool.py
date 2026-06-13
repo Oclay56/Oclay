@@ -21,6 +21,7 @@ from .probability_engine import (
     probability_confidence_interval,
 )
 from .slip_optimizer import build_ev_max_slip
+from .thesis_blocks import build_slip_blueprints
 from .stake_sgm_browser import (
     SGM_BOARD_FRESH_SECONDS,
     make_sgm_selection_row_id,
@@ -64,11 +65,37 @@ def compact_sgm_candidate_pool_response(pool: dict[str, Any]) -> dict[str, Any]:
         for row in pool.get("rankedCandidates") or []
         if isinstance(row, dict)
     ]
+    blueprints = compact.get("slipBlueprints")
+    if isinstance(blueprints, dict):
+        compact["slipBlueprints"] = _compact_slip_blueprints(blueprints)
     notes = list(compact.get("notes") or [])
     notes.append(
         "Compact mode returns lean candidate rows only; call with compact=false or fetch the SGM board for full per-row context."
     )
     compact["notes"] = notes
+    return compact
+
+
+def _compact_slip_blueprints(blueprints: dict[str, Any]) -> dict[str, Any]:
+    """Strip the heavy per-leg payloads from blocks for the compact response."""
+    compact = dict(blueprints)
+    compact["blocks"] = [
+        {
+            "fixtureSlug": block.get("fixtureSlug"),
+            "matchup": block.get("matchup"),
+            "thesis": block.get("thesis"),
+            "thesisTag": block.get("thesisTag"),
+            "legCount": block.get("legCount"),
+            "rowIds": block.get("rowIds"),
+            "winProbability": block.get("winProbability"),
+            "payoutOdds": block.get("payoutOdds"),
+            "marketMix": block.get("marketMix"),
+            "tilt": block.get("tilt"),
+            "thesisPolicy": block.get("thesisPolicy"),
+        }
+        for block in blueprints.get("blocks") or []
+        if isinstance(block, dict)
+    ]
     return compact
 
 
@@ -349,6 +376,11 @@ async def build_sgm_candidate_pool_from_boards(
     )
     per_game = _per_game_summary(flat_rows, ranked, scored_rows, rejected)
     market_concentration = _market_concentration_diagnostics(ranked)
+    slip_blueprints = build_slip_blueprints(
+        ranked,
+        target_odds_min=target_odds_min,
+        target_odds_max=target_odds_max,
+    )
     return {
         "source": "stake_ui_sgm_candidate_pool",
         "decisionOwner": "custom_gpt",
@@ -452,6 +484,7 @@ async def build_sgm_candidate_pool_from_boards(
         },
         "marketExposure": dict(Counter(row["normalizedMarketKey"] for row in ranked)),
         "marketConcentration": market_concentration,
+        "slipBlueprints": slip_blueprints,
         "marketContest": market_contest,
         "gameContest": game_contest,
         "contextCoverage": _context_coverage(ranked),

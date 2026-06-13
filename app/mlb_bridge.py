@@ -81,7 +81,9 @@ MARKET_STAT_MAP = {
     "home-runs": {"group": "hitting", "statKey": "homeRuns", "label": "Home Runs"},
     "home-run": {"group": "hitting", "statKey": "homeRuns", "label": "Home Runs"},
     "rbi": {"group": "hitting", "statKey": "rbi", "label": "RBI"},
+    "rbis": {"group": "hitting", "statKey": "rbi", "label": "RBI"},
     "runs": {"group": "hitting", "statKey": "runs", "label": "Runs"},
+    "run": {"group": "hitting", "statKey": "runs", "label": "Runs"},
     "strikeouts": {
         "group": "pitching",
         "statKey": "strikeOuts",

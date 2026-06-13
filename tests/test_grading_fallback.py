@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import date
 
 from app.grading import grade_pending_picks
 from app.pick_ledger import PickLedger
@@ -25,12 +26,38 @@ class FakeEngine:
         return {"games": [{"date": SLATE, "stats": {"hits": 2}}]}
 
 
-def _pending_pick(ledger, *, row_id, player, with_id):
+class NoGameYetEngine(FakeEngine):
+    async def get_player_recent_history(self, player_id, group="hitting", season=None, limit=25):
+        # Player resolves, but no game on the slate date yet (box score not posted).
+        return {"games": [{"date": "2025-05-01", "stats": {"hits": 1}}]}
+
+
+class ScheduleEngine(NoGameYetEngine):
+    def __init__(self, *, name_to_id, status, inning=None):
+        super().__init__(name_to_id=name_to_id)
+        self._status = status
+        self._inning = inning
+
+    async def get_schedule(self, game_date):
+        # fixtureSlug "reds-astros" -> away "reds", home "astros" both match.
+        return {
+            "games": [
+                {
+                    "status": self._status,
+                    "inning": self._inning,
+                    "awayTeam": {"key": "reds"},
+                    "homeTeam": {"key": "astros"},
+                }
+            ]
+        }
+
+
+def _pending_pick(ledger, *, row_id, player, with_id, market="hits"):
     row = {
         "fixtureSlug": "reds-astros",
         "rowId": row_id,
         "player": player,
-        "normalizedMarketKey": "hits",
+        "normalizedMarketKey": market,
         "side": "over",
         "line": 0.5,
         "odds": 1.8,
@@ -95,3 +122,84 @@ def test_unresolved_name_leaves_pick_pending(tmp_path):
     assert report["skippedUnresolved"] == 1
     # Left pending for a later retry, not voided.
     assert ledger.summary()["pendingPicks"] == 1
+
+
+def test_waiting_on_stats_lists_the_player(tmp_path):
+    ledger = PickLedger(db_path=tmp_path / "l.sqlite")
+    _pending_pick(ledger, row_id="row-4", player="Pending Pat", with_id=True)
+    engine = NoGameYetEngine(name_to_id={})  # player resolves by id, but no game yet
+
+    # today is right after the slate, so the pick is genuinely waiting (not stale).
+    report = asyncio.run(
+        grade_pending_picks(engine, ledger=ledger, slate_date=SLATE, today=date(2025, 5, 9))
+    )
+
+    assert report["graded"] == 0
+    assert report["needsAttention"] == []
+    waiting = report["waitingOn"]
+    assert len(waiting) == 1
+    assert waiting[0]["player"] == "Pending Pat"
+    assert waiting[0]["category"] == "waiting"
+    assert "box score" in waiting[0]["reason"]
+
+
+def test_unmapped_market_is_flagged_for_attention(tmp_path):
+    ledger = PickLedger(db_path=tmp_path / "l.sqlite")
+    _pending_pick(ledger, row_id="row-5", player="Mapped Mike", with_id=True, market="nonsense_prop")
+    engine = FakeEngine(name_to_id={})
+
+    report = asyncio.run(grade_pending_picks(engine, ledger=ledger, slate_date=SLATE))
+
+    assert report["waitingOn"] == []
+    attention = report["needsAttention"]
+    assert len(attention) == 1
+    assert attention[0]["player"] == "Mapped Mike"
+    assert attention[0]["category"] == "attention"
+    assert "not recognized" in attention[0]["reason"]
+
+
+def test_stale_waiting_pick_is_promoted_to_attention(tmp_path):
+    ledger = PickLedger(db_path=tmp_path / "l.sqlite")
+    _pending_pick(ledger, row_id="row-7", player="Old Game", with_id=True)
+    engine = NoGameYetEngine(name_to_id={})  # would be "waiting", but it's days old
+
+    # today is well after the slate -> a real wait would have settled by now.
+    report = asyncio.run(
+        grade_pending_picks(engine, ledger=ledger, slate_date=SLATE, today=date(2025, 5, 20))
+    )
+
+    assert report["waitingOn"] == []
+    attention = report["needsAttention"]
+    assert len(attention) == 1
+    assert attention[0]["player"] == "Old Game"
+    assert "still unsettled" in attention[0]["reason"]
+
+
+def test_unresolved_player_is_flagged_for_attention(tmp_path):
+    ledger = PickLedger(db_path=tmp_path / "l.sqlite")
+    _pending_pick(ledger, row_id="row-6", player="Ghost Player", with_id=False)
+    engine = FakeEngine(name_to_id={})  # name never resolves
+
+    report = asyncio.run(grade_pending_picks(engine, ledger=ledger, slate_date=SLATE))
+
+    attention = report["needsAttention"]
+    assert len(attention) == 1
+    assert attention[0]["player"] == "Ghost Player"
+    assert "not matched" in attention[0]["reason"]
+
+
+def test_waiting_pick_is_tagged_with_live_game_status(tmp_path):
+    ledger = PickLedger(db_path=tmp_path / "l.sqlite")
+    _pending_pick(ledger, row_id="row-8", player="Live Player", with_id=True)
+    engine = ScheduleEngine(
+        name_to_id={}, status="In Progress", inning={"ordinal": "6th", "state": "Top"}
+    )
+
+    report = asyncio.run(
+        grade_pending_picks(engine, ledger=ledger, slate_date=SLATE, today=date(2025, 5, 9))
+    )
+
+    waiting = report["waitingOn"]
+    assert len(waiting) == 1
+    assert waiting[0]["gameStatus"] == "In Progress"
+    assert waiting[0]["reason"] == "game in progress (Top 6th)"

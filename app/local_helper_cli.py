@@ -29,7 +29,7 @@ except ImportError:  # pragma: no cover - exercised by environments without rich
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 APP_DISPLAY_NAME = "Oclay"
-CLI_VERSION = "1.5.0"
+CLI_VERSION = "2.7.5"
 DEFAULT_TEXT_COLOR = "#F4F6F8"
 DEFAULT_CLI_COLOR_SETTINGS = {"textColor": DEFAULT_TEXT_COLOR}
 RESET = "\033[0m"

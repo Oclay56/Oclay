@@ -62,7 +62,7 @@ async def _run_mlb_stats_client_uses_official_endpoint_paths():
     assert dict(seen_requests[1].url.params) == {
         "sportId": "1",
         "date": "2026-05-08",
-        "hydrate": "probablePitcher",
+        "hydrate": "probablePitcher,linescore",
     }
     assert seen_requests[2].url.path == "/api/v1/teams/117/roster"
     assert dict(seen_requests[2].url.params) == {

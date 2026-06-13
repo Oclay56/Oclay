@@ -213,8 +213,21 @@ def _normalize_game(game: dict[str, Any]) -> dict[str, Any]:
         "gamePk": game.get("gamePk"),
         "gameDate": game.get("gameDate"),
         "status": (game.get("status") or {}).get("detailedState"),
+        "inning": _normalize_inning(game.get("linescore") or {}),
         "awayTeam": _normalize_game_team(away),
         "homeTeam": _normalize_game_team(home),
+    }
+
+
+def _normalize_inning(linescore: dict[str, Any]) -> dict[str, Any] | None:
+    ordinal = linescore.get("currentInningOrdinal")
+    state = linescore.get("inningState")
+    if not ordinal and not state:
+        return None
+    return {
+        "current": linescore.get("currentInning"),
+        "ordinal": ordinal,
+        "state": state,
     }
 
 

@@ -477,6 +477,15 @@ def test_sgm_only_market_mapping_supports_derived_and_hitting_stats():
     }
     assert stat_mapping_for_market("pitcher strikeouts")["group"] == "pitching"
 
+    # Plural market keys must resolve too -- live slips log "rbis"/"runs", and an
+    # unmapped key silently leaves those legs ungradable forever.
+    for key in ("rbi", "rbis"):
+        mapping = stat_mapping_for_market(key)
+        assert mapping["statKey"] == "rbi", key
+        assert mapping["supported"] is True, key
+    for key in ("runs", "run"):
+        assert stat_mapping_for_market(key)["statKey"] == "runs", key
+
 
 def test_enrich_props_matches_by_player_and_team_then_attaches_stats():
     clear_mlb_bridge_cache()

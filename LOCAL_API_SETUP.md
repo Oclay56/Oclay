@@ -49,14 +49,19 @@ tunnel.)
 
 ## Every day
 
-- Just run **`Oclay.bat`**. It now starts the local API and the tunnel
-  automatically (minimized in the taskbar) alongside the TUI. When you **close the
-  TUI window, the API and tunnel shut down with it.** With the ngrok domain set,
-  there's nothing to copy or repaste — one launcher, done.
+- Just run **`Oclay.bat`**. It starts the local API and the tunnel automatically
+  alongside the TUI. By default they run **completely hidden** — no window, no
+  taskbar entry, visible only in Task Manager — so you only see the main TUI
+  window. When you **close the TUI window, the API and tunnel shut down with it.**
+  With the ngrok domain set, there's nothing to copy or repaste — one launcher, done.
+- **Debugging:** to watch the API/tunnel logs, set `SHOW_BACKGROUND_TERMINALS=true`
+  in `.env`. They'll open as visible (minimized) windows instead of hidden. Set it
+  back to `false` (the default) to hide them again.
 - `Oclay_API.bat` still exists if you ever want to run the API + tunnel on their
-  own without the TUI.
-- First-time only: if you haven't set the ngrok domain yet, restore the minimized
-  **Oclay Tunnel** window from the taskbar to copy the temporary URL.
+  own (in visible windows) without the TUI.
+- First-time only: if you haven't set the ngrok domain yet, either set
+  `SHOW_BACKGROUND_TERMINALS=true` to see the **Oclay Tunnel** window, or just run
+  `Oclay_API.bat`, to copy the temporary URL.
 
 ## Render
 

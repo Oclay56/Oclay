@@ -59,6 +59,7 @@ from .real_quote import real_quote_check_from_result
 from .timing import build_timing_plan, games_from_mlb_schedule
 from .slate import DEFAULT_TIMEZONE
 from .stake_client import StakeAPIError, StakeClient, build_http_client
+from .stake_odds_fill import fill_missing_leg_odds
 from .stake_sgm_browser import make_sgm_selection_row_id, sgm_market_filter_matches
 from .storage import GptActionStore
 from .supabase_ledger import (
@@ -1718,6 +1719,7 @@ async def oclay_learning_model_backtest(
 async def oclay_learning_record_slip(
     payload: dict[str, Any] = Body(default_factory=dict),
     ledger: PickLedger = Depends(get_pick_ledger),
+    stake_client: StakeClient = Depends(get_stake_client),
 ) -> dict[str, Any]:
     """Log the slip the user chose to bet so it self-grades and calibrates.
 
@@ -1735,6 +1737,12 @@ async def oclay_learning_record_slip(
         )
     slate_date = _date_from_body(payload)
     mode = str(payload.get("mode") or slip.get("mode") or "best_available")
+    # Best-effort: fill any leg the GPT logged without odds from the live Stake
+    # fixture, so per-market ROI gets the real per-leg price. Never blocks logging.
+    try:
+        odds_auto_filled = await fill_missing_leg_odds(stake_client, legs)
+    except Exception:
+        odds_auto_filled = 0
     try:
         result = ledger.record_slip(
             slip,
@@ -1750,6 +1758,12 @@ async def oclay_learning_record_slip(
         "purpose": "oclay_record_slip",
         "recorded": True,
         "reviewOnly": True,
+        "oddsAutoFilled": odds_auto_filled,
+        # Echo the thesis-block tags that were persisted, so the caller can
+        # confirm the slip was logged with the structure the feedback loop learns from.
+        "structure": slip.get("structure"),
+        "thesisTags": slip.get("thesisTags")
+        or sorted({leg.get("thesisTag") for leg in legs if leg.get("thesisTag")}),
         "note": (
             "Slip logged. Run grade after the games finish to settle it; "
             "calibration then learns from the result."

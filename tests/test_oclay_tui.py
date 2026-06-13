@@ -53,7 +53,7 @@ def test_oclay_tui_exposes_rgb_action_not_palette():
     assert honest.label == "Honest"
     assert honest.shortcut == "ctrl+h"
     profitable = next(action for action in actions if action.action_id == "profitable")
-    assert profitable.label == "Profitable"
+    assert profitable.label == "ROI"
     assert profitable.shortcut == "ctrl+p"
     assert all(action.label != "Palette" for action in actions)
     assert all("Historic" not in action.label for action in actions)
@@ -163,10 +163,10 @@ def test_rgb_preset_payload_saves_only_user_rgb_targets(tmp_path):
     assert tuple(raw) == tuple(sorted(TUI_RGB_PRESET_KEYS))
     assert raw == tui_color_preset_payload(palette)
     assert loaded == {
-        "background": "#010203",
-        "panel": "#040506",
         "menuLabelText": "#070809",
     }
+    assert "background" not in raw
+    assert "panel" not in raw
     assert "shortcutText" not in raw
     assert "panelBorder" not in raw
 

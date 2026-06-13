@@ -101,3 +101,43 @@ def test_backtest_reports_leg_and_slip_performance(tmp_path):
 
     # No model estimates on imported history yet.
     assert report["modelCalibration"]["status"] == "no_model_scored_history_yet"
+
+
+def test_per_market_roi_uses_individual_leg_odds(tmp_path):
+    ledger = _ledger(tmp_path)
+    # A logged slip carries each leg's own odds (the GPT path), unlike imports.
+    ledger.record_slip(
+        {
+            "legs": [
+                {"rowId": "r1", "player": "A", "normalizedMarketKey": "hits",
+                 "side": "over", "line": 0.5, "odds": 3.0},
+                {"rowId": "r2", "player": "B", "normalizedMarketKey": "rbi",
+                 "side": "over", "line": 0.5, "odds": 2.0},
+            ],
+        },
+        slate_date="2025-05-08",
+    )
+    pending = {p["player"]: p["pick_key"] for p in ledger.pending_picks()}
+    ledger.apply_grade(pending["A"], outcome="win", actual_value=1)   # +2.0 at 3.0
+    ledger.apply_grade(pending["B"], outcome="loss", actual_value=0)  # -1.0 at 2.0
+
+    leg = run_backtest(ledger, min_market_samples=1)["legPerformance"]
+
+    by_market = {m["market"]: m for m in leg["byMarket"]}
+    assert by_market["hits:over"]["pricedLegs"] == 1
+    assert by_market["hits:over"]["roi"] == 2.0
+    assert by_market["rbi:over"]["roi"] == -1.0
+
+    # Straight-bet leg ROI: (+2.0 - 1.0) / 2 priced legs = +0.5.
+    assert leg["legRoi"]["pricedLegs"] == 2
+    assert leg["legRoi"]["roi"] == 0.5
+
+    # The negative-ROI market is flagged.
+    assert any(m["market"] == "rbi:over" for m in leg["losingMarkets"])
+
+    # Imported legs (no odds) stay hit-rate only -- never faked into the money math.
+    imported = _ledger(tmp_path.with_name("imported"))
+    imported.record_imported_slips(parse_bet_history(WINNING_SLIP), season=2025)
+    imp_leg = run_backtest(imported, min_market_samples=1)["legPerformance"]
+    assert imp_leg["legRoi"]["pricedLegs"] == 0
+    assert imp_leg["legRoi"]["roi"] is None

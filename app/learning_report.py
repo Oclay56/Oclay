@@ -23,6 +23,39 @@ def _num(value: Any) -> str:
     return "-" if value is None else str(value)
 
 
+def _pending_line(item: dict[str, Any]) -> str:
+    """One held-back pick as 'Player - market side line (date)'."""
+    player = item.get("player") or "(unknown player)"
+    market = item.get("market") or "?"
+    side = str(item.get("side") or "").lower()
+    line = item.get("line")
+    bet = " ".join(part for part in (market, side, _num(line)) if part and part != "-")
+    date = item.get("slateDate")
+    tail = f"  [dim]{date}[/]" if date else ""
+    return f"[bold]{player}[/] - {bet}{tail}"
+
+
+def _print_pending_sections(console: Console, source: dict[str, Any]) -> None:
+    """Shared 'Waiting on stats' / 'Needs attention' lists used by Trainer and
+    Honest. Renders nothing when nothing is held back."""
+    waiting = source.get("waitingOn") or []
+    attention = source.get("needsAttention") or []
+    if waiting:
+        console.print(
+            f"\n  [bold]Waiting on stats[/] ({len(waiting)}) "
+            "[dim]- will settle on a later run once box scores post:[/]"
+        )
+        for item in waiting:
+            console.print(f"    - {_pending_line(item)}  [dim]({item.get('reason')})[/]")
+    if attention:
+        console.print(
+            f"\n  [bold red]Needs attention[/] ({len(attention)}) "
+            "[dim]- these will not settle on their own:[/]"
+        )
+        for item in attention:
+            console.print(f"    - {_pending_line(item)}  [red]({item.get('reason')})[/]")
+
+
 def print_profitability_report(report: dict[str, Any], *, console: Console | None = None) -> None:
     console = console or Console()
     console.rule("[bold green]PROFITABLE  -  Realized Performance")
@@ -35,25 +68,47 @@ def print_profitability_report(report: dict[str, Any], *, console: Console | Non
 
     leg = report.get("legPerformance", {})
     if leg.get("gradedLegs"):
+        leg_roi = leg.get("legRoi") or {}
+        roi_val = leg_roi.get("roi")
+        roi_str = ""
+        if roi_val is not None:
+            roi_color = "green" if roi_val > 0 else "red"
+            roi_str = (
+                f"   [bold]Straight-bet ROI:[/] [{roi_color}]{_pct(roi_val)}[/] "
+                f"[dim](over {leg_roi.get('pricedLegs')} legs with odds)[/]"
+            )
         console.print(
             f"[bold]Leg hit rate:[/] {_pct(leg.get('overallHitRate'))} "
-            f"over {leg.get('gradedLegs')} graded legs\n"
+            f"over {leg.get('gradedLegs')} graded legs{roi_str}\n"
         )
-        table = Table(title="Hit rate by market", title_style="bold")
+        table = Table(title="By market", title_style="bold")
         table.add_column("Market")
         table.add_column("Legs", justify="right")
         table.add_column("Wins", justify="right")
         table.add_column("Hit rate", justify="right")
+        table.add_column("Priced", justify="right")
+        table.add_column("ROI", justify="right")
         for m in leg.get("byMarket", []):
             style = "dim" if not m.get("sufficientSample") else ""
+            mroi = m.get("roi")
+            roi_cell = "-" if mroi is None else _pct(mroi)
             table.add_row(
-                m["market"], str(m["legs"]), str(m.get("wins", "")), _pct(m["hitRate"]), style=style
+                m["market"], str(m["legs"]), str(m.get("wins", "")), _pct(m["hitRate"]),
+                str(m.get("pricedLegs", 0)), roi_cell, style=style
             )
         console.print(table)
+        console.print(
+            "[dim]Priced = legs that carry their own odds (imported history is hit-rate only). "
+            "ROI is straight-bet, per leg.[/]"
+        )
         cold = leg.get("coldMarkets") or []
         if cold:
             names = ", ".join(c["market"] for c in cold)
             console.print(f"\n[bold red]Cold markets (hit < 50% on real sample):[/] {names}")
+        losing = leg.get("losingMarkets") or []
+        if losing:
+            names = ", ".join(f"{m['market']} ({_pct(m['roi'])})" for m in losing)
+            console.print(f"[bold red]Losing money (negative ROI on priced sample):[/] {names}")
     else:
         console.print("[yellow]No graded legs yet - log live slips and let them settle.[/]")
 
@@ -82,7 +137,40 @@ def print_profitability_report(report: dict[str, Any], *, console: Console | Non
                 )
             console.print(table)
 
+    _print_block_engine_sections(report, console)
     console.print("\n[dim]Read-only report. Close this window whenever you're done.[/]")
+
+
+def _print_block_engine_sections(report: dict[str, Any], console: Console) -> None:
+    """Realized ROI by slip structure and by thesis tag (thesis-block engine)."""
+    structures = (report.get("structurePerformance") or {}).get("structures") or []
+    rated_structures = [s for s in structures if s.get("structure") not in (None, "untagged")]
+    if rated_structures:
+        table = Table(title="ROI by structure", title_style="bold")
+        table.add_column("Structure")
+        table.add_column("Slips", justify="right")
+        table.add_column("Win rate", justify="right")
+        table.add_column("ROI", justify="right")
+        for s in rated_structures:
+            style = "green" if (s.get("roi") or 0) > 0 else "red"
+            table.add_row(s["structure"], str(s["slips"]), _pct(s.get("winRate")), f"[{style}]{_pct(s.get('roi'))}[/]")
+        console.print(table)
+
+    theses = (report.get("thesisPerformance") or {}).get("theses") or []
+    rated_theses = [t for t in theses if t.get("thesisTag") not in (None, "untagged")]
+    if rated_theses:
+        table = Table(title="ROI by thesis", title_style="bold")
+        table.add_column("Thesis tag")
+        table.add_column("Slips", justify="right")
+        table.add_column("Win rate", justify="right")
+        table.add_column("ROI", justify="right")
+        for t in rated_theses:
+            style = "green" if (t.get("roi") or 0) > 0 else "red"
+            table.add_row(t["thesisTag"], str(t["slips"]), _pct(t.get("winRate")), f"[{style}]{_pct(t.get('roi'))}[/]")
+        console.print(table)
+        losing = (report.get("thesisPerformance") or {}).get("losingTheses") or []
+        if losing:
+            console.print(f"[bold red]Losing theses (negative ROI, ≥5 slips):[/] {', '.join(losing)}")
 
 
 def print_trainer_report(report: dict[str, Any], *, console: Console | None = None) -> None:
@@ -107,6 +195,8 @@ def print_trainer_report(report: dict[str, Any], *, console: Console | None = No
         console.print(f"  Slips settled: {grade.get('slips', {}).get('slipsSettled', 0)}")
     else:
         console.print("  [yellow]Nothing new to grade - normal until logged live slips finish.[/]")
+
+    _print_pending_sections(console, grade)
 
     cal = report.get("calibrate", {})
     samples = cal.get("gradedSamples", 0) or 0
@@ -144,6 +234,7 @@ def print_honesty_report(report: dict[str, Any], *, console: Console | None = No
     if report.get("status") != "ok":
         console.print("[yellow]Not enough scoreable history yet to judge calibration.[/]")
         _print_coverage(report, console)
+        _print_pending_sections(console, report)
         console.print("\n[dim]Close this window whenever you're done.[/]")
         return
 
@@ -182,6 +273,7 @@ def print_honesty_report(report: dict[str, Any], *, console: Console | None = No
         console.print("[dim]Small-sample rows (<10 picks) are dimmed - trust the aggregate.[/]")
 
     _print_coverage(report, console)
+    _print_pending_sections(console, report)
     console.print("\n[dim]Read-only report. Close this window whenever you're done.[/]")
 
 

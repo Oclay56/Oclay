@@ -24,7 +24,7 @@ from .backtest_model import run_model_backtest
 from .calibration import build_calibration_report
 from .correlation_calibration import build_correlation_estimates
 from .player_backfill import backfill_person_ids
-from .grading import grade_pending_picks
+from .grading import diagnose_pending_picks, grade_pending_picks
 from .mlb_data import MLBDataEngine, MLBStatsClient, build_mlb_http_client
 from .pick_ledger import PickLedger
 from .probability_engine import invalidate_calibration_cache
@@ -42,7 +42,12 @@ async def _model_backtest(min_prior_games: int) -> dict[str, Any]:
     ledger = PickLedger()
     async with build_mlb_http_client() as http_client:
         engine = MLBDataEngine(MLBStatsClient(http_client))
-        return await run_model_backtest(engine, ledger=ledger, min_prior_games=min_prior_games)
+        report = await run_model_backtest(engine, ledger=ledger, min_prior_games=min_prior_games)
+        # Read-only: show which logged picks are still missing from calibration.
+        pending = await diagnose_pending_picks(engine, ledger=ledger)
+        report["waitingOn"] = pending["waitingOn"]
+        report["needsAttention"] = pending["needsAttention"]
+        return report
 
 
 async def _backfill_ids() -> dict[str, Any]:
@@ -127,7 +132,7 @@ def main(argv: list[str] | None = None) -> int:
         result = PickLedger().summary()
     elif args.command == "backtest":
         if getattr(args, "pretty", False):
-            print("Running Profitable (realized backtest)...\n", flush=True)
+            print("Running ROI (realized backtest)...\n", flush=True)
             from .learning_report import print_profitability_report
 
             print_profitability_report(run_backtest())

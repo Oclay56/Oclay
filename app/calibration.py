@@ -33,6 +33,9 @@ _MIN_SAMPLES_TO_FIT = 30
 _MARKET_POLICY_MIN_SAMPLES = 60
 _EXCLUDE_ROI_THRESHOLD = -0.06
 _DOWNWEIGHT_ROI_THRESHOLD = -0.01
+# Thesis kill-switch: decided slips are rarer than graded legs, so the sample
+# floor is lower, but the same realized-ROI gating logic applies.
+_THESIS_POLICY_MIN_SAMPLES = 20
 _BUCKET_EDGES = (0.0, 0.35, 0.45, 0.5, 0.55, 0.6, 0.7, 0.85, 1.0)
 _PROB_FLOOR = 0.02
 _PROB_CEILING = 0.98
@@ -56,10 +59,12 @@ def build_calibration_report(
 
     corrections = _fit_all_corrections(samples)
     market_policies = build_market_policies(graded)
+    thesis_policies = build_thesis_policies(ledger.decided_slips_with_legs())
     if persist:
         if corrections:
             ledger.save_calibrations(corrections)
         ledger.save_market_policies(market_policies)
+        ledger.save_thesis_policies(thesis_policies)
 
     return {
         "purpose": "probability_calibration_report",
@@ -73,6 +78,10 @@ def build_calibration_report(
         "marketPolicies": market_policies,
         "killedMarkets": sorted(
             market for market, policy in market_policies.items() if policy["status"] == "exclude"
+        ),
+        "thesisPolicies": thesis_policies,
+        "killedTheses": sorted(
+            tag for tag, policy in thesis_policies.items() if policy["status"] == "exclude"
         ),
         "notes": [
             "Brier and log loss are lower-is-better; a 50/50 coin scores Brier 0.25.",
@@ -120,6 +129,53 @@ def build_market_policies(graded_rows: list[dict[str, Any]]) -> dict[str, dict[s
             "edgePickSample": len(edge_rows),
             "realizedRoi": round(roi, 4) if roi is not None else None,
             "hitRate": round(hit_rate, 4) if hit_rate is not None else None,
+        }
+    return policies
+
+
+def build_thesis_policies(decided_slips: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Per-thesis kill-switch from realized slip ROI.
+
+    A thesis tag that loses money across a real sample of decided slips is
+    excluded; a marginally negative one is downweighted. The block ranker reads
+    these so a losing thesis stops being surfaced -- the same "stop playing the
+    games you lose" gate the market kill-switch applies, at the thesis level.
+    """
+    by_thesis: dict[str, list[dict[str, Any]]] = {}
+    for slip in decided_slips:
+        if str(slip.get("result") or "") not in {GRADE_WIN, "loss"}:
+            continue
+        for tag in slip.get("thesisTags") or []:
+            by_thesis.setdefault(str(tag), []).append(slip)
+
+    policies: dict[str, dict[str, Any]] = {}
+    for tag, slips in by_thesis.items():
+        pnl: list[float] = []
+        wins = 0
+        for slip in slips:
+            odds = _float_or_none(slip.get("raw_product_odds"))
+            if odds is None or odds <= 1.0:
+                continue
+            if slip.get("result") == GRADE_WIN:
+                pnl.append(odds - 1.0)
+                wins += 1
+            else:
+                pnl.append(-1.0)
+        n = len(pnl)
+        roi = (sum(pnl) / n) if n else None
+        if n < _THESIS_POLICY_MIN_SAMPLES or roi is None:
+            status = "insufficient_data"
+        elif roi <= _EXCLUDE_ROI_THRESHOLD:
+            status = "exclude"
+        elif roi < _DOWNWEIGHT_ROI_THRESHOLD:
+            status = "downweight"
+        else:
+            status = "ok"
+        policies[tag] = {
+            "status": status,
+            "samples": n,
+            "realizedRoi": round(roi, 4) if roi is not None else None,
+            "winRate": round(wins / n, 4) if n else None,
         }
     return policies
 

@@ -29,6 +29,16 @@ SHELL_BORDER_COLOR = "#6A6A6A"
 ROW_HOVER_FILL = "#3A3A3A"
 MENU_LABEL_TEXT = "#B8B19C"
 
+# When a Windows Terminal background image is in use, the outer frame around the
+# control panel is left transparent so the wallpaper shows through in the margins.
+# The inner panel keeps its solid fill so the menu text stays readable over any
+# image. Flip this to False to go back to the all-black look.
+WALLPAPER_BACKDROP = True
+CANVAS_FILL = "transparent" if WALLPAPER_BACKDROP else BACKGROUND_FILL
+# The center console is transparent too (border + text only) so the wallpaper
+# shows through it, unless the user tunes a solid Center Console colour.
+CONSOLE_FILL = "transparent" if WALLPAPER_BACKDROP else PANEL_FILL
+
 os.environ.setdefault("COLORTERM", "truecolor")
 os.environ["TEXTUAL_COLOR_SYSTEM"] = "truecolor"
 
@@ -101,7 +111,7 @@ TUI_ACTIONS: tuple[TuiAction, ...] = (
     TuiAction("build", "Build", "ctrl+b", "Open builder mode for validated slips.", "build", "Building"),
     TuiAction("trainer", "Trainer", "ctrl+t", "Grade settled picks and recalibrate the model.", "trainer", "Training"),
     TuiAction("honest", "Honest", "ctrl+h", "Is the model honest? Point-in-time calibration check.", "honest", "Validating"),
-    TuiAction("profitable", "Profitable", "ctrl+p", "Is it profitable? Realized hit rate and slip ROI.", "profitable", "Backtesting"),
+    TuiAction("profitable", "ROI", "ctrl+p", "Is it profitable? Realized hit rate and slip ROI.", "profitable", "Backtesting"),
     TuiAction("clean", "Clean", "ctrl+c", "Clear rebuildable cache.", "clean", "Cleaning"),
     TuiAction("domain", "Domain", "ctrl+q", "Toggle Stake domain profile.", "domain", "Switching domain"),
     TuiAction("rgb", "RGB", "ctrl+g", "Tune TUI background colors.", "rgb", "RGB"),
@@ -115,11 +125,21 @@ REPORT_WINDOW_COMMANDS: dict[str, tuple[str, str]] = {
     "honest": ("model-backtest", "validating"),
     "profitable": ("backtest", "backtesting"),
 }
-TUI_RGB_PRESET_KEYS = ("background", "panel", "menuLabelText")
+TUI_RGB_PRESET_KEYS = ("menuLabelText",)
 RGB_COLOR_TARGET_IDS = frozenset(TUI_RGB_PRESET_KEYS)
 RGB_PRESET_SAVE_ID = "savePreset"
 RGB_PRESET_LOAD_ID = "loadPreset"
 RGB_TARGET_ROW_COUNT = len(TUI_RGB_PRESET_KEYS) + 2
+
+
+def console_fill(palette: dict[str, str] | None = None) -> str:
+    """Background for the center console.
+
+    In wallpaper mode the console is always transparent (border + text only) so
+    the wallpaper shows straight through; only when the backdrop is disabled does
+    it fall back to the solid panel fill.
+    """
+    return CONSOLE_FILL
 
 
 def tui_theme_path(*, root_dir: Path = ROOT_DIR) -> Path:
@@ -576,7 +596,7 @@ if TEXTUAL_AVAILABLE:
 
         def paint_hover(self, hovered: bool) -> None:
             palette = getattr(self.app, "palette", DEFAULT_TUI_PALETTE)
-            background = palette["rowHover"] if hovered else palette["panel"]
+            background = palette["rowHover"] if hovered else console_fill(palette)
             color = palette["highlightText"] if hovered else palette["menuLabelText"]
             self.set_class(hovered, "menu-hover")
             self.styles.background = background
@@ -600,7 +620,7 @@ if TEXTUAL_AVAILABLE:
 
         def paint_selected(self, selected: bool) -> None:
             palette = getattr(self.app, "palette", DEFAULT_TUI_PALETTE)
-            background = palette["rowHover"] if selected else palette["panel"]
+            background = palette["rowHover"] if selected else console_fill(palette)
             color = palette["highlightText"] if selected else palette["rowText"]
             self.set_class(selected, "target-active")
             self.styles.background = background
@@ -614,7 +634,7 @@ if TEXTUAL_AVAILABLE:
     class OclayTui(App[None]):
         CSS = f"""
         Screen {{
-            background: {DEFAULT_TUI_PALETTE["background"]};
+            background: {CANVAS_FILL};
             color: {DEFAULT_TUI_PALETTE["mutedText"]};
             overflow: hidden hidden;
         }}
@@ -624,7 +644,7 @@ if TEXTUAL_AVAILABLE:
             height: 3;
             width: 100%;
             padding: 1 1 0 1;
-            background: {DEFAULT_TUI_PALETTE["background"]};
+            background: {CANVAS_FILL};
             color: {DEFAULT_TUI_PALETTE["mutedText"]};
         }}
 
@@ -632,13 +652,13 @@ if TEXTUAL_AVAILABLE:
             align: center middle;
             height: 1fr;
             width: 100%;
-            background: {DEFAULT_TUI_PALETTE["background"]};
+            background: {CANVAS_FILL};
         }}
 
         #shell-stack {{
             width: 116;
             height: 24;
-            background: {DEFAULT_TUI_PALETTE["background"]};
+            background: {CANVAS_FILL};
         }}
 
         #shell {{
@@ -646,7 +666,7 @@ if TEXTUAL_AVAILABLE:
             height: 22;
             max-height: 22;
             min-height: 22;
-            background: {DEFAULT_TUI_PALETTE["background"]};
+            background: {CANVAS_FILL};
             border: round {DEFAULT_TUI_PALETTE["shellBorder"]};
             padding: 0 0;
             overflow: hidden hidden;
@@ -655,7 +675,7 @@ if TEXTUAL_AVAILABLE:
         #shell-inner {{
             width: 100%;
             height: 100%;
-            background: {DEFAULT_TUI_PALETTE["panel"]};
+            background: {CONSOLE_FILL};
             padding: 1 4;
             overflow: hidden hidden;
         }}
@@ -665,7 +685,7 @@ if TEXTUAL_AVAILABLE:
             width: 116;
             padding: 0 0;
             content-align: right top;
-            background: {DEFAULT_TUI_PALETTE["background"]};
+            background: {CANVAS_FILL};
             color: {DEFAULT_TUI_PALETTE["mutedText"]};
         }}
 
@@ -689,21 +709,21 @@ if TEXTUAL_AVAILABLE:
 
         #shell-bottom-fill {{
             height: {MENU_FOOTER_CUSHION_HEIGHT};
-            background: {DEFAULT_TUI_PALETTE["panel"]};
+            background: {CONSOLE_FILL};
         }}
 
         #menu-wrap {{
             width: 100%;
             height: {MENU_ROW_COUNT};
             align: center top;
-            background: {DEFAULT_TUI_PALETTE["panel"]};
+            background: {CONSOLE_FILL};
             overflow: hidden hidden;
         }}
 
         #actions {{
             width: {MENU_ROW_WIDTH};
             height: {MENU_ROW_COUNT};
-            background: {DEFAULT_TUI_PALETTE["panel"]};
+            background: {CONSOLE_FILL};
             scrollbar-size: 0 0;
             overflow: hidden hidden;
         }}
@@ -712,7 +732,7 @@ if TEXTUAL_AVAILABLE:
             width: {MENU_ROW_WIDTH};
             height: 1;
             color: {DEFAULT_TUI_PALETTE["menuLabelText"]};
-            background: {DEFAULT_TUI_PALETTE["panel"]};
+            background: {CONSOLE_FILL};
             padding: 0 0;
         }}
 
@@ -722,7 +742,7 @@ if TEXTUAL_AVAILABLE:
         #actions:focus > CommandRow.-highlight,
         #actions:focus > CommandRow.--highlight {{
             color: {DEFAULT_TUI_PALETTE["menuLabelText"]};
-            background: {DEFAULT_TUI_PALETTE["panel"]};
+            background: {CONSOLE_FILL};
             text-style: none;
         }}
 
@@ -731,7 +751,7 @@ if TEXTUAL_AVAILABLE:
         #actions > CommandRow.--highlight .command-label,
         #actions:focus > CommandRow.-highlight .command-label,
         #actions:focus > CommandRow.--highlight .command-label {{
-            background: {DEFAULT_TUI_PALETTE["panel"]};
+            background: {CONSOLE_FILL};
         }}
 
         #actions > CommandRow.menu-hover {{
@@ -749,7 +769,7 @@ if TEXTUAL_AVAILABLE:
         .command-label {{
             width: {MENU_ROW_WIDTH};
             height: 1;
-            background: {DEFAULT_TUI_PALETTE["panel"]};
+            background: {CONSOLE_FILL};
         }}
 
         #page-title {{
@@ -765,7 +785,7 @@ if TEXTUAL_AVAILABLE:
         #output-panel {{
             width: {OUTPUT_PANEL_WIDTH};
             height: 9;
-            background: {DEFAULT_TUI_PALETTE["outputPanel"]};
+            background: {CONSOLE_FILL};
             border: round {DEFAULT_TUI_PALETTE["panelBorder"]};
             padding: 1 2;
             overflow: hidden hidden;
@@ -775,13 +795,13 @@ if TEXTUAL_AVAILABLE:
             width: {OUTPUT_TEXT_WIDTH};
             height: {OUTPUT_VISIBLE_HEIGHT};
             color: {DEFAULT_TUI_PALETTE["mutedText"]};
-            background: {DEFAULT_TUI_PALETTE["outputPanel"]};
+            background: {CONSOLE_FILL};
             overflow: hidden hidden;
         }}
 
         #rgb-panel {{
             height: 1fr;
-            background: {DEFAULT_TUI_PALETTE["panel"]};
+            background: {CONSOLE_FILL};
             overflow: hidden hidden;
         }}
 
@@ -794,7 +814,7 @@ if TEXTUAL_AVAILABLE:
         #rgb-targets {{
             width: {MENU_ROW_WIDTH};
             height: {RGB_TARGET_ROW_COUNT};
-            background: {DEFAULT_TUI_PALETTE["panel"]};
+            background: {CONSOLE_FILL};
             scrollbar-size: 0 0;
             overflow: hidden hidden;
         }}
@@ -803,7 +823,7 @@ if TEXTUAL_AVAILABLE:
             width: {MENU_ROW_WIDTH};
             height: 1;
             color: {DEFAULT_TUI_PALETTE["rowText"]};
-            background: {DEFAULT_TUI_PALETTE["panel"]};
+            background: {CONSOLE_FILL};
             padding: 0 0;
         }}
 
@@ -813,7 +833,7 @@ if TEXTUAL_AVAILABLE:
         #rgb-targets:focus > RgbTargetRow.-highlight,
         #rgb-targets:focus > RgbTargetRow.--highlight {{
             color: {DEFAULT_TUI_PALETTE["rowText"]};
-            background: {DEFAULT_TUI_PALETTE["panel"]};
+            background: {CONSOLE_FILL};
             text-style: none;
         }}
 
@@ -838,7 +858,7 @@ if TEXTUAL_AVAILABLE:
             ("ctrl+b", "run_action('build')", "Build"),
             ("ctrl+t", "run_action('trainer')", "Trainer"),
             ("ctrl+h", "run_action('honest')", "Honest"),
-            ("ctrl+p", "run_action('profitable')", "Profitable"),
+            ("ctrl+p", "run_action('profitable')", "ROI"),
             ("ctrl+c", "run_action('clean')", "Clean"),
             ("ctrl+q", "run_action('domain')", "Domain"),
             ("ctrl+g", "run_action('rgb')", "RGB"),
@@ -848,7 +868,7 @@ if TEXTUAL_AVAILABLE:
             ("b", "run_action('build')", "Build"),
             ("t", "run_action('trainer')", "Trainer"),
             ("h", "run_action('honest')", "Honest"),
-            ("p", "run_action('profitable')", "Profitable"),
+            ("p", "run_action('profitable')", "ROI"),
             ("c", "run_action('clean')", "Clean"),
             ("q", "run_action('domain')", "Domain"),
             ("g", "run_action('rgb')", "RGB"),
@@ -858,7 +878,13 @@ if TEXTUAL_AVAILABLE:
         ]
 
         def __init__(self, *, root_dir: Path = ROOT_DIR) -> None:
-            super().__init__()
+            # ansi_color=True (when the wallpaper backdrop is on) is set at
+            # construction so Textual builds its colour pipeline WITHOUT the
+            # ANSIToTruecolor filter -- that filter would otherwise rewrite the
+            # transparent frame's "default" background into a solid grey and hide
+            # the Windows Terminal wallpaper. Our widgets use explicit truecolor
+            # hex, which is unaffected by this switch.
+            super().__init__(ansi_color=True if WALLPAPER_BACKDROP else None)
             self.root_dir = root_dir
             self.display_workspace = Path.home()
             self.palette = load_tui_palette(root_dir=root_dir)
@@ -875,7 +901,7 @@ if TEXTUAL_AVAILABLE:
             self._last_render_state: tuple[Any, ...] | None = None
             self._setup_state = "checking"
             self._active_subprocess: Any = None
-            self._selected_rgb_target = "background"
+            self._selected_rgb_target = "menuLabelText"
             self._stop_requested = False
             self._inline_message = ""
             self._output_lines: list[str] = []
@@ -904,8 +930,6 @@ if TEXTUAL_AVAILABLE:
                             with Vertical(id="rgb-panel", classes="hidden"):
                                 yield Static("", id="rgb-target-label")
                                 yield ListView(
-                                    RgbTargetRow("background"),
-                                    RgbTargetRow("panel"),
                                     RgbTargetRow("menuLabelText"),
                                     RgbTargetRow(RGB_PRESET_SAVE_ID),
                                     RgbTargetRow(RGB_PRESET_LOAD_ID),
@@ -918,12 +942,40 @@ if TEXTUAL_AVAILABLE:
                     yield Static("[stable]", id="footer-stable")
 
         def on_mount(self) -> None:
+            self._install_clear_theme()
             disable_terminal_text_selection()
             self.ui_thread = threading.current_thread()
             self._setup_state = self._read_setup_state()
             self._apply_palette()
             self._refresh_layout(force=True)
             self.set_interval(0.45, self._tick)
+
+        def _install_clear_theme(self) -> None:
+            # Textual fills the whole app with the active theme's background
+            # color (a solid grey), which sits in front of the Windows Terminal
+            # wallpaper -- the "grey wall". Swap in a theme whose base background
+            # is the terminal's own "default" color so the transparent frame
+            # passes straight through to the wallpaper. The center panel keeps
+            # its explicit solid fill, so the menu text stays readable on top.
+            if not WALLPAPER_BACKDROP:
+                return
+            try:
+                import dataclasses as _dataclasses
+                from textual.theme import BUILTIN_THEMES as _BUILTIN_THEMES
+
+                base = _BUILTIN_THEMES.get(self.theme) or _BUILTIN_THEMES["textual-dark"]
+                clear = _dataclasses.replace(
+                    base,
+                    name="oclay-clear",
+                    background="ansi_default",
+                    surface="ansi_default",
+                )
+                self.register_theme(clear)
+                self.theme = "oclay-clear"
+            except Exception:
+                # If Textual's theme API ever shifts, fall back to the solid
+                # look rather than taking down the TUI.
+                pass
 
         def _apply_palette(self) -> None:
             root = self.query_one("#screen-root", Container)
@@ -940,21 +992,22 @@ if TEXTUAL_AVAILABLE:
             rgb_panel = self.query_one("#rgb-panel", Vertical)
             rgb_targets = self.query_one("#rgb-targets", ListView)
 
-            root.styles.background = self.palette["background"]
-            workspace_top.styles.background = self.palette["background"]
-            footer_stable.styles.background = self.palette["background"]
-            shell_stack.styles.background = self.palette["background"]
-            shell.styles.background = self.palette["background"]
+            root.styles.background = CANVAS_FILL
+            workspace_top.styles.background = CANVAS_FILL
+            footer_stable.styles.background = CANVAS_FILL
+            shell_stack.styles.background = CANVAS_FILL
+            shell.styles.background = CANVAS_FILL
             shell.styles.border = ("round", self.palette["shellBorder"])
-            shell_inner.styles.background = self.palette["panel"]
-            bottom_fill.styles.background = self.palette["panel"]
-            menu_wrap.styles.background = self.palette["panel"]
-            actions.styles.background = self.palette["panel"]
-            output_panel.styles.background = self.palette["outputPanel"]
+            console = console_fill(self.palette)
+            shell_inner.styles.background = console
+            bottom_fill.styles.background = console
+            menu_wrap.styles.background = console
+            actions.styles.background = console
+            output_panel.styles.background = console
             output_panel.styles.border = ("round", self.palette["panelBorder"])
-            output_text.styles.background = self.palette["outputPanel"]
-            rgb_panel.styles.background = self.palette["panel"]
-            rgb_targets.styles.background = self.palette["panel"]
+            output_text.styles.background = console
+            rgb_panel.styles.background = console
+            rgb_targets.styles.background = console
 
             for selector, color in (
                 ("#workspace-top", "mutedText"),
@@ -979,7 +1032,7 @@ if TEXTUAL_AVAILABLE:
                 "#rgb-target-label",
                 "#rgb-help",
             ):
-                self.query_one(selector, Static).styles.background = self.palette["panel"]
+                self.query_one(selector, Static).styles.background = console
             for row in self.query(CommandRow):
                 row.paint_hover(row.has_class("menu-hover"))
             for row in self.query(RgbTargetRow):
@@ -1112,7 +1165,7 @@ if TEXTUAL_AVAILABLE:
 
         def _selected_rgb_color(self) -> str:
             color_key = rgb_target_color_key(self._selected_rgb_target)
-            return self.palette[color_key or "background"]
+            return self.palette[color_key or "menuLabelText"]
 
         def _apply_rgb_target_color(self, target_id: str, color: str) -> None:
             if target_id == "background":

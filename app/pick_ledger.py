@@ -96,18 +96,30 @@ class PickLedger:
         slip_id = str(slip.get("slipId") or _content_slip_id(slate_date, legs))
         namespace = str(slate_date) if slate_date else (run_id or slip_id)
         now = _utc_now()
+        # Structure / thesis tags (thesis-block engine) for per-structure and
+        # per-thesis realized ROI and the thesis kill-switch.
+        target_band = slip.get("targetBand") or {}
+        thesis_tags = slip.get("thesisTags")
+        if not thesis_tags:
+            thesis_tags = [leg.get("thesisTag") for leg in legs if leg.get("thesisTag")]
+        thesis_tags_json = json.dumps(sorted({str(t) for t in (thesis_tags or []) if t})) if thesis_tags else None
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO slips (
                     slip_id, run_id, slate_date, mode, leg_count, raw_product_odds,
-                    estimated_win_probability, expected_value, created_at, graded_at, result
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+                    estimated_win_probability, expected_value, structure, thesis_tags,
+                    target_low, target_high, created_at, graded_at, result
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
                 ON CONFLICT(slip_id) DO UPDATE SET
                     leg_count = excluded.leg_count,
                     raw_product_odds = excluded.raw_product_odds,
                     estimated_win_probability = excluded.estimated_win_probability,
-                    expected_value = excluded.expected_value
+                    expected_value = excluded.expected_value,
+                    structure = excluded.structure,
+                    thesis_tags = excluded.thesis_tags,
+                    target_low = excluded.target_low,
+                    target_high = excluded.target_high
                 """,
                 (
                     slip_id,
@@ -118,6 +130,10 @@ class PickLedger:
                     _float_or_none(slip.get("rawProductOdds")),
                     _float_or_none((slip.get("slipProbability") or {}).get("estimatedWinProbability")),
                     _float_or_none((slip.get("slipProbability") or {}).get("expectedValue")),
+                    slip.get("structure"),
+                    thesis_tags_json,
+                    _float_or_none(target_band.get("min")),
+                    _float_or_none(target_band.get("max")),
                     now,
                     PENDING,
                 ),
@@ -134,12 +150,20 @@ class PickLedger:
                 )
                 conn.execute(
                     """
-                    INSERT INTO slip_legs (slip_id, leg_index, row_id, pick_key)
-                    VALUES (?, ?, ?, ?)
+                    INSERT INTO slip_legs (slip_id, leg_index, row_id, pick_key, block_index, thesis_tag)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     ON CONFLICT(slip_id, leg_index) DO UPDATE SET
-                        row_id = excluded.row_id, pick_key = excluded.pick_key
+                        row_id = excluded.row_id, pick_key = excluded.pick_key,
+                        block_index = excluded.block_index, thesis_tag = excluded.thesis_tag
                     """,
-                    (slip_id, index, leg.get("rowId"), _pick_key(leg, namespace)),
+                    (
+                        slip_id,
+                        index,
+                        leg.get("rowId"),
+                        _pick_key(leg, namespace),
+                        _int_or_none(leg.get("blockIndex")),
+                        leg.get("thesisTag"),
+                    ),
                 )
             conn.commit()
         return {"slipId": slip_id, "legsRecorded": len(legs)}
@@ -609,6 +633,74 @@ class PickLedger:
             for row in rows
         }
 
+    def save_thesis_policies(self, policies: dict[str, dict[str, Any]]) -> int:
+        now = _utc_now()
+        actionable = {
+            tag: policy
+            for tag, policy in policies.items()
+            if policy.get("status") in {"exclude", "downweight", "ok"}
+        }
+        with self._connect() as conn:
+            for thesis_tag, policy in actionable.items():
+                conn.execute(
+                    """
+                    INSERT INTO thesis_policy (
+                        thesis_tag, status, samples, realized_roi, win_rate, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(thesis_tag) DO UPDATE SET
+                        status = excluded.status,
+                        samples = excluded.samples,
+                        realized_roi = excluded.realized_roi,
+                        win_rate = excluded.win_rate,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        thesis_tag,
+                        policy.get("status"),
+                        _int_or_none(policy.get("samples")),
+                        _float_or_none(policy.get("realizedRoi")),
+                        _float_or_none(policy.get("winRate")),
+                        now,
+                    ),
+                )
+            conn.commit()
+        return len(actionable)
+
+    def load_thesis_policies(self) -> dict[str, dict[str, Any]]:
+        with self._connect() as conn:
+            try:
+                rows = conn.execute("SELECT * FROM thesis_policy").fetchall()
+            except sqlite3.OperationalError:
+                return {}
+        return {
+            str(row["thesis_tag"]): {
+                "status": row["status"],
+                "samples": row["samples"],
+                "realizedRoi": row["realized_roi"],
+                "winRate": row["win_rate"],
+            }
+            for row in rows
+        }
+
+    def decided_slips_with_legs(self) -> list[dict[str, Any]]:
+        """Decided slips enriched with their structure and thesis tags.
+
+        The backtest reads this to slice realized slip ROI by structure (e.g.
+        ``3-block``) and by thesis tag, and the thesis kill-switch reads it to
+        gate losing theses.
+        """
+        with self._connect() as conn:
+            slips = [dict(row) for row in conn.execute(
+                "SELECT * FROM slips WHERE result IN (?, ?)", (GRADE_WIN, GRADE_LOSS)
+            ).fetchall()]
+        for slip in slips:
+            raw = slip.get("thesis_tags")
+            try:
+                slip["thesisTags"] = json.loads(raw) if raw else []
+            except (TypeError, ValueError):
+                slip["thesisTags"] = []
+        return slips
+
     def graded_legs_by_game(self) -> list[list[dict[str, Any]]]:
         """Graded legs grouped by game, for measuring same-game co-hit rates."""
         with self._connect() as conn:
@@ -792,6 +884,10 @@ class PickLedger:
                     raw_product_odds REAL,
                     estimated_win_probability REAL,
                     expected_value REAL,
+                    structure TEXT,
+                    thesis_tags TEXT,
+                    target_low REAL,
+                    target_high REAL,
                     created_at TEXT NOT NULL,
                     graded_at TEXT,
                     result TEXT NOT NULL DEFAULT 'pending'
@@ -801,6 +897,8 @@ class PickLedger:
                     leg_index INTEGER NOT NULL,
                     row_id TEXT,
                     pick_key TEXT,
+                    block_index INTEGER,
+                    thesis_tag TEXT,
                     PRIMARY KEY (slip_id, leg_index)
                 );
 
@@ -837,9 +935,46 @@ class PickLedger:
                     realized_scalar REAL,
                     recorded_at TEXT
                 );
+
+                CREATE TABLE IF NOT EXISTS thesis_policy (
+                    thesis_tag TEXT PRIMARY KEY,
+                    status TEXT,
+                    samples INTEGER,
+                    realized_roi REAL,
+                    win_rate REAL,
+                    updated_at TEXT
+                );
                 """
             )
+            self._migrate_columns(conn)
             conn.commit()
+
+    def _migrate_columns(self, conn: sqlite3.Connection) -> None:
+        """Add columns introduced after a ledger was first created.
+
+        ``CREATE TABLE IF NOT EXISTS`` never alters an existing table, so older
+        ledgers miss the structure/thesis columns. Add them idempotently.
+        """
+        wanted = {
+            "slips": {
+                "structure": "TEXT",
+                "thesis_tags": "TEXT",
+                "target_low": "REAL",
+                "target_high": "REAL",
+            },
+            "slip_legs": {
+                "block_index": "INTEGER",
+                "thesis_tag": "TEXT",
+            },
+        }
+        for table, columns in wanted.items():
+            existing = {
+                str(row["name"])
+                for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+            }
+            for name, decl in columns.items():
+                if name not in existing:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
 
 
 def _pick_key(row: dict[str, Any], run_id: str) -> str:

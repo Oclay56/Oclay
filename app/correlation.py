@@ -148,6 +148,21 @@ def _get_measured_estimates() -> dict[str, dict[str, Any]]:
         return {}
 
 
+def joint_win_probability(probs: list[float], rho: float) -> float:
+    """Public: P(all win) under the single-factor copula at correlation ``rho``.
+
+    Thin wrapper over the same Vasicek integration used for slip projections,
+    so callers that already hold per-unit win probabilities (e.g. block-level
+    probabilities in the thesis-block engine) can price a shared common factor
+    without re-implementing the copula. ``rho`` is clamped to a sane range.
+    """
+    cleaned = [p for p in (_float_or_none(p) for p in probs) if p is not None]
+    if not cleaned:
+        return 0.0
+    bounded = max(0.0, min(_MAX_EFFECTIVE_RHO, float(rho)))
+    return _single_factor_joint_probability(cleaned, bounded)
+
+
 def slip_correlation_summary(legs: list[dict[str, Any]]) -> dict[str, Any]:
     pairs: list[dict[str, Any]] = []
     rhos: list[float] = []

@@ -39,7 +39,7 @@ class MLBStatsClient:
             params={
                 "sportId": 1,
                 "date": game_date,
-                "hydrate": "probablePitcher",
+                "hydrate": "probablePitcher,linescore",
             },
         )
 

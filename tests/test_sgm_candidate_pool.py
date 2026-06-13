@@ -663,3 +663,10 @@ def test_candidate_pool_ranks_context_backed_rows_and_skips_weak_per_game():
     ]
     assert result["perGame"]["fixture-b"]["skipped"] is True
     assert result["rejectedSummary"]["score_below_quality_floor"] >= 1
+
+    # The thesis-block engine runs over the ranked candidates and ships with the
+    # pool response (live integration, not a static field).
+    blueprints = result["slipBlueprints"]
+    assert blueprints["engine"] == "thesis_block_slip_engine"
+    assert blueprints["guardrails"]["maxOddsPerBlock"] == 501.0
+    assert isinstance(blueprints["blocks"], list)
