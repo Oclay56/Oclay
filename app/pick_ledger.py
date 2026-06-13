@@ -692,6 +692,21 @@ class PickLedger:
             for row in rows
         }
 
+    def slip_leg_pick_keys(self) -> set[str]:
+        """Pick keys that belong to a logged slip (an actual bet leg).
+
+        Picks not in this set are whole-board candidate-pool captures recorded
+        for unbiased calibration -- tracked, but never bets.
+        """
+        with self._connect() as conn:
+            try:
+                rows = conn.execute(
+                    "SELECT DISTINCT pick_key FROM slip_legs WHERE pick_key IS NOT NULL"
+                ).fetchall()
+            except sqlite3.OperationalError:
+                return set()
+        return {str(row["pick_key"]) for row in rows}
+
     def decided_slips_with_legs(self) -> list[dict[str, Any]]:
         """Decided slips enriched with their structure and thesis tags.
 

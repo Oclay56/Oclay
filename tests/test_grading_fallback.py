@@ -143,6 +143,31 @@ def test_waiting_on_stats_lists_the_player(tmp_path):
     assert "box score" in waiting[0]["reason"]
 
 
+def test_pending_split_into_slip_legs_and_board_captures(tmp_path):
+    ledger = PickLedger(db_path=tmp_path / "l.sqlite")
+    leg_a = {
+        "fixtureSlug": "reds-astros", "rowId": "A", "player": "Alice",
+        "normalizedMarketKey": "hits", "side": "over", "line": 0.5, "odds": 1.8,
+        "mlbPersonId": 100, "probabilityAssessment": {"estimatedProbability": 0.6},
+    }
+    leg_b = {**leg_a, "rowId": "B", "player": "Bob", "mlbPersonId": 101}
+    # The whole scored board is captured (both are board candidates)...
+    ledger.record_candidate_pool(
+        {"mode": "best_available", "rankedCandidates": [leg_a, leg_b]}, slate_date=SLATE
+    )
+    # ...but only leg A is actually bet (logged in a slip).
+    ledger.record_slip({"legs": [leg_a]}, slate_date=SLATE)
+
+    engine = NoGameYetEngine(name_to_id={})  # both resolve by id, no game yet -> waiting
+    report = asyncio.run(
+        grade_pending_picks(engine, ledger=ledger, slate_date=SLATE, today=date(2025, 5, 9))
+    )
+
+    sources = {item["player"]: item["source"] for item in report["waitingOn"]}
+    assert sources == {"Alice": "slip", "Bob": "board"}
+    assert report["pendingSources"] == {"slipLegs": 1, "boardCaptures": 1}
+
+
 def test_unmapped_market_is_flagged_for_attention(tmp_path):
     ledger = PickLedger(db_path=tmp_path / "l.sqlite")
     _pending_pick(ledger, row_id="row-5", player="Mapped Mike", with_id=True, market="nonsense_prop")

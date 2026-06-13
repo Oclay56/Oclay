@@ -58,11 +58,20 @@ def _days_since(slate_date: Any, today: date) -> int | None:
         return None
 
 
-def _pending_detail(pick: dict[str, Any], reason: str, *, today: date | None = None) -> dict[str, Any]:
+def _pending_detail(
+    pick: dict[str, Any],
+    reason: str,
+    *,
+    today: date | None = None,
+    slip_keys: set[str] | None = None,
+) -> dict[str, Any]:
     today = today or date.today()
     slate = pick.get("slate_date")
     category = "waiting" if reason in _WAITING_REASONS else "attention"
     reason_text = _REASON_TEXT.get(reason, reason)
+    # Distinguish an actual bet leg (part of a logged slip) from a whole-board
+    # candidate-pool capture (recorded for unbiased calibration, never a bet).
+    source = "slip" if slip_keys and pick.get("pick_key") in slip_keys else "board"
 
     # Aging: a "waiting" pick whose game is days old is almost certainly stuck,
     # not pending -- promote it so it stops hiding in the waiting list.
@@ -81,6 +90,7 @@ def _pending_detail(pick: dict[str, Any], reason: str, *, today: date | None = N
         "fixture": pick.get("fixture_slug"),
         "reason": reason_text,
         "category": category,
+        "source": source,
     }
 
 
@@ -100,8 +110,10 @@ async def grade_pending_picks(
     """
     ledger = ledger or PickLedger()
     pending = ledger.pending_picks(slate_date=slate_date)
+    slip_keys = ledger.slip_leg_pick_keys()
     gradable, waiting_on, needs_attention = await _classify_pending(
-        engine, pending, history_limit=history_limit, persist_ledger=ledger, today=today
+        engine, pending, history_limit=history_limit, persist_ledger=ledger,
+        today=today, slip_keys=slip_keys,
     )
 
     graded = 0
@@ -122,7 +134,20 @@ async def grade_pending_picks(
         "slateDate": slate_date,
         "waitingOn": waiting_on,
         "needsAttention": needs_attention,
+        "pendingSources": _pending_source_counts(waiting_on, needs_attention),
     }
+
+
+def _pending_source_counts(*item_lists: list[dict[str, Any]]) -> dict[str, int]:
+    """Split pending items into your bet legs vs board-only calibration captures."""
+    slip = board = 0
+    for items in item_lists:
+        for item in items:
+            if item.get("source") == "slip":
+                slip += 1
+            else:
+                board += 1
+    return {"slipLegs": slip, "boardCaptures": board}
 
 
 async def diagnose_pending_picks(
@@ -140,8 +165,10 @@ async def diagnose_pending_picks(
     """
     ledger = ledger or PickLedger()
     pending = ledger.pending_picks(slate_date=slate_date)
+    slip_keys = ledger.slip_leg_pick_keys()
     gradable, waiting_on, needs_attention = await _classify_pending(
-        engine, pending, history_limit=history_limit, persist_ledger=None, today=today
+        engine, pending, history_limit=history_limit, persist_ledger=None,
+        today=today, slip_keys=slip_keys,
     )
     await _attach_game_status(engine, waiting_on)
     return {
@@ -149,6 +176,7 @@ async def diagnose_pending_picks(
         "gradableNow": len(gradable),
         "waitingOn": waiting_on,
         "needsAttention": needs_attention,
+        "pendingSources": _pending_source_counts(waiting_on, needs_attention),
     }
 
 
@@ -159,6 +187,7 @@ async def _classify_pending(
     history_limit: int,
     persist_ledger: PickLedger | None,
     today: date | None,
+    slip_keys: set[str] | None = None,
 ) -> tuple[list[tuple[dict[str, Any], str, float | None]], list[dict[str, Any]], list[dict[str, Any]]]:
     """Run each pending pick through the grader, sorting into gradable now /
     waiting on stats / needs attention. Applies no grades (caller decides)."""
@@ -181,7 +210,7 @@ async def _classify_pending(
             outcome, actual_value = payload
             gradable.append((pick, outcome, actual_value))
             continue
-        detail = _pending_detail(pick, payload, today=today)
+        detail = _pending_detail(pick, payload, today=today, slip_keys=slip_keys)
         if detail["category"] == "waiting":
             waiting_on.append(detail)
         else:

@@ -35,25 +35,46 @@ def _pending_line(item: dict[str, Any]) -> str:
     return f"[bold]{player}[/] - {bet}{tail}"
 
 
-def _print_pending_sections(console: Console, source: dict[str, Any]) -> None:
+def _print_pending_group(console: Console, items: list[dict[str, Any]], *, reason_style: str) -> None:
+    """Print one pending bucket, split into your bet legs vs board captures."""
+    slip = [i for i in items if i.get("source") == "slip"]
+    board = [i for i in items if i.get("source") != "slip"]
+    if slip:
+        console.print("    [bold]Your slip legs:[/]")
+        for item in slip:
+            console.print(f"      - {_pending_line(item)}  [{reason_style}]({item.get('reason')})[/]")
+    if board:
+        console.print("    [dim]Board captures (not bets - tracked for calibration only):[/]")
+        for item in board:
+            console.print(f"      - [dim]{_pending_line(item)}[/]  [{reason_style}]({item.get('reason')})[/]")
+
+
+def _print_pending_sections(console: Console, report: dict[str, Any]) -> None:
     """Shared 'Waiting on stats' / 'Needs attention' lists used by Trainer and
-    Honest. Renders nothing when nothing is held back."""
-    waiting = source.get("waitingOn") or []
-    attention = source.get("needsAttention") or []
+    Honest. Each bucket is split into your actual bet legs and whole-board
+    calibration captures so the list never reads like you bet more than you did.
+    Renders nothing when nothing is held back."""
+    waiting = report.get("waitingOn") or []
+    attention = report.get("needsAttention") or []
     if waiting:
         console.print(
             f"\n  [bold]Waiting on stats[/] ({len(waiting)}) "
             "[dim]- will settle on a later run once box scores post:[/]"
         )
-        for item in waiting:
-            console.print(f"    - {_pending_line(item)}  [dim]({item.get('reason')})[/]")
+        _print_pending_group(console, waiting, reason_style="dim")
     if attention:
         console.print(
             f"\n  [bold red]Needs attention[/] ({len(attention)}) "
             "[dim]- these will not settle on their own:[/]"
         )
-        for item in attention:
-            console.print(f"    - {_pending_line(item)}  [red]({item.get('reason')})[/]")
+        _print_pending_group(console, attention, reason_style="red")
+    counts = report.get("pendingSources") or {}
+    slip_legs, board_caps = counts.get("slipLegs"), counts.get("boardCaptures")
+    if (waiting or attention) and slip_legs is not None and board_caps is not None:
+        console.print(
+            f"\n  [dim]{slip_legs} of these are your logged slip legs; "
+            f"{board_caps} are whole-board calibration captures (not bets).[/]"
+        )
 
 
 def print_profitability_report(report: dict[str, Any], *, console: Console | None = None) -> None:
