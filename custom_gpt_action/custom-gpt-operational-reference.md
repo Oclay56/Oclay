@@ -49,6 +49,19 @@ Never reverse this order. Do not invent lines, odds, players, markets, row IDs, 
 - `portfolioExposure`: cross-game player/team/game concentration so the slate is not piled onto one player or game; over-exposure raises `concentrationFlags`.
 - `meanAdjustments` now also includes `weather` (temperature + wind on power/contact markets) alongside handedness, Log5, and park.
 
+## Slip Blueprint Terms (Thesis-Block Engine)
+
+The candidate pool's `slipBlueprints` assembles the ranked board into a portfolio of blocks. A **block** is a 2–16 leg, ≤501x correlated same-game cluster with a single thesis; a **slip** multiplies blocks from different games to a target odds band.
+
+- `slipBlueprints.blocks`: per-game blocks, each with `winProbability`, `payoutOdds` (the predicted repriced SGM quote), `thesis` / `thesisTag`, `marketMix`, `tilt`, and `legCount`.
+- `thesisTag`: the block's pattern label — `ace_suppression`, `offense_explosion`, `offense_shutdown`, `player_game_script`, `player_multistat`, `mixed_game_script`. Descriptive, not a reason to pick.
+- `bandBlueprints`: returned when `targetOddsMin` / `targetOddsMax` are passed — board-driven block combinations landing in that band, ranked by `riskAdjustedValue`. `structure` (e.g. `3-block`) names the shape; block count and multipliers come from the board, never a fixed power formula.
+- `bandNote`: present when the board cannot reach the target band; relay it instead of padding.
+- `evMaxBlueprint`: the best blueprint when no band is requested.
+- `marginalContribution`: per-block `winProbabilityCost` and `oddsMultiplier` — the real cost of each added block to slip win probability.
+- `concentration` / `crossBlockRho` / `sharedFactorFragility`: how much a blueprint leans one direction across games; higher means more fragile, and the engine penalizes it. Prefer lower-`concentration` blueprints at equal value.
+- `balanceControls`: the enforced caps — per-market-type cap, one sequence/lottery leg per block, cross-block concentration penalty.
+
 ## Market Contest
 
 Use two passes:
@@ -87,6 +100,8 @@ Market concentration is diagnostic only. Do not force diversity, and do not forc
 - Home runs: power profile, pitcher HR allowed, park, weather, handedness, odds.
 - Stolen bases: player attempt rate, catcher/pitcher run game, lineup status, matchup context.
 
+First-event markets (first hit/run/home run; Stake `first_h` / `first_r` / `first_hr`) are excluded: they require play-by-play event ordering to settle and carry no counting-stat signal, so the backend drops them as `first_event_market_excluded` and they are never surfaced, built, or logged. They are still normalized to canonical `first_*` keys so a display-name row can never masquerade as `hits` / `home_runs`. RBI is a standard, supported, gradeable counting stat.
+
 ## Validation Failures
 
 Hard block if the row identity, market, side, line, fixture, player/team, or row ID does not match. Minor odds movement may be shown as a warning only if the backend validation explicitly permits it.
@@ -99,7 +114,7 @@ For line-sensitive work, refresh stale Stake board data. After lineup, injury, p
 
 The backend records every scored row, grades it later against official MLB box scores, and refits per-market calibration that sharpens future `estimatedProbability` values. Grading and calibration run on the backend's own schedule and are not something the GPT triggers or imports. The GPT simply reads the already-calibrated probabilities. Until enough graded history exists, estimates lean on reasoned priors, so keep treating them as support, not certainty.
 
-The one learning action the GPT may take is `recordSlip`: after the user confirms a finalized slip, the GPT can log the chosen legs so they self-grade later. This only records the pick (review-only bookkeeping, never a wager) and only with the user's go-ahead. The GPT never runs grading or calibration itself.
+The one learning action the GPT may take is `recordSlip`: after the user confirms a finalized slip, the GPT can log the chosen legs so they self-grade later. This only records the pick (review-only bookkeeping, never a wager) and only with the user's go-ahead. The GPT never runs grading or calibration itself. When a slip came from a `slipBlueprints` blueprint, also pass its `structure`, `thesisTags`, and `targetBand`: the backend then measures realized ROI per structure and per thesis and runs a thesis kill-switch, so future blueprints stop surfacing shapes and theses that lose money over a real sample.
 
 ## Safety
 

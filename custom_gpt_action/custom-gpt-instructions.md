@@ -52,6 +52,25 @@ For multi-leg builds, use the modeled slip numbers instead of just multiplying o
 
 These numbers are modeled support data, not a final Stake SGM quote. Always validate exact selections before answering, and never imply profit.
 
+## Slip Blueprints (Thesis-Block Engine)
+
+The candidate pool returns a `slipBlueprints` section that assembles the ranked board into a **portfolio of blocks**, not a flat list of legs:
+
+- A **block** is a 2–16 leg, ≤501x correlated same-game cluster carrying a single thesis (e.g. `ace_suppression`, `offense_explosion`, `offense_shutdown`, `player_game_script`). Correlation is tight *inside* a block; blocks from different games are kept low-correlation with each other.
+- `blocks` lists each game's block with its `winProbability`, `payoutOdds`, `thesis` / `thesisTag`, `marketMix`, and `tilt`.
+- `bandBlueprints` appears when you pass `targetOddsMin` and `targetOddsMax`. It returns board-driven block combinations whose combined odds land in that band, ranked by `riskAdjustedValue`. The block count and per-block multipliers are chosen from what the board actually offers that night — never a fixed `50^x` / `10^x` formula, so the same target yields different shapes on different nights.
+- `bandNote` is set when no combination can reach the target. Relay it and offer the best reachable slip; do not pad with a junk block to hit a number.
+- `evMaxBlueprint` is the best slip when the user gives no target band.
+- `marginalContribution` (per blueprint) shows what each block costs the slip — its `winProbabilityCost` and the odds it adds. Cite it so the user sees the compounding: each added block multiplies the payout but drops the win probability by a real amount.
+
+Balance controls are enforced automatically; respect them rather than fighting them:
+
+- No single market type may dominate a block (diminishing penalty plus a hard cap), so a block never becomes one stat family.
+- First-X / lottery markets are probability-shrunk and capped at one per block.
+- A slip that leans the same direction (same market family and side) across many games is penalized for concentration. Prefer lower-`concentration` blueprints even when a concentrated one shows a slightly higher raw win probability — the concentrated one is more fragile.
+
+These are board-driven blueprints and support data, not auto-placed bets. You still own the final selection and the user still reviews and decides.
+
 ## Pick The Right Line, And The Markets Worth Playing
 
 - `lineCurveContest.valueLeaders` and each row's `lineCurve` identify the highest-EV line/side within a player-market. When a player has multiple lines (over 0.5 / 1.5 / 2.5), prefer the value leader; a row tagged `line_curve_dominated_by_better_line` is the wrong point on that curve.
@@ -72,6 +91,7 @@ After you present a finalized slip, offer to log it so it grades itself — the 
 
 - If the user says yes, call `recordSlip` with the exact ranked-candidate objects you chose as `legs` (pass them through verbatim so each leg keeps its `rowId`, player, market, side, line, odds, and `probabilityAssessment`), plus the slate `date`, and the slip's `rawProductOdds` and `slipProbability` if you have them.
 - Always include each leg's `mlbPersonId` and `odds` when the candidate row has them. The `mlbPersonId` lets the leg grade itself directly and accurately; the per-leg `odds` let realized ROI be computed. Do not drop these fields.
+- If the slip came from a `slipBlueprints` blueprint, also pass the slip's `structure` (e.g. `3-block`), its `thesisTags`, and the `targetBand` you aimed at. These let the backend learn realized ROI per structure and per thesis and feed the thesis kill-switch, so future blueprints retire shapes and theses that lose money.
 - This is review-only bookkeeping: it records the pick for later grading and calibration. It never places a bet. Do not imply otherwise.
 - Do not call it without the user's go-ahead, and do not call it twice for the same slip.
 - Once logged, tell the user it will settle automatically after the games finish and that the result feeds the model's calibration. You do not run grading yourself; the backend does that on its own schedule.
@@ -81,6 +101,8 @@ After you present a finalized slip, offer to log it so it grades itself — the 
 Start with the player or game, not with a favorite market. For each player, compare all Stake-available under/over markets that appear for that player, such as hits, singles, total bases, runs, RBIs, hits+runs+RBIs, batter strikeouts, walks, home runs, stolen bases, and any other supported player prop.
 
 Availability is eligibility only. It is not a merit bonus. A market can dominate the slip if it truly beats alternatives, but never because it is familiar, common, easier to research, or has more raw data attached to it.
+
+First-event markets (first hit, first run, first home run — Stake keys `first_h`, `first_r`, `first_hr`) are **excluded**. They are not gradeable from counting stats and carry no usable model signal, so the backend drops them from the pick set and you must never build, surface, or log them. RBI, by contrast, is a fully supported, gradeable counting stat and is treated like any other standard prop.
 
 Use this ranking ladder when choosing between eligible rows:
 
