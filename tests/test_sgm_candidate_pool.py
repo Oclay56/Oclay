@@ -670,3 +670,58 @@ def test_candidate_pool_ranks_context_backed_rows_and_skips_weak_per_game():
     assert blueprints["engine"] == "thesis_block_slip_engine"
     assert blueprints["guardrails"]["maxOddsPerBlock"] == 501.0
     assert isinstance(blueprints["blocks"], list)
+
+
+def test_target_band_does_not_filter_individual_legs():
+    # A large slip-level target band must NOT be applied as a per-leg odds
+    # filter. Normal-priced (~2x) legs must still be accepted so blocks can form
+    # and the decomposition can multiply them up to the band. (Regression: the
+    # band was leaking into the per-leg flatten filter and rejecting every row.)
+    boards = [
+        {
+            "source": "stake_ui_sgm",
+            "fixtureSlug": "fixture-a",
+            "capturedAt": _fresh_captured_at(),
+            "playerProps": [
+                _row("Strong Under", "Test A", "Singles", 2.25),
+                _row("Diverse Under", "Test A", "Batter Walks", 2.05),
+            ],
+            "teamMarkets": [],
+        },
+    ]
+
+    result = asyncio.run(
+        build_sgm_candidate_pool_from_boards(
+            boards,
+            CandidateFakeMLBEngine(),
+            date="2026-05-25",
+            side="under",
+            mode="best_available",
+            quality_floor=55,
+            history_limit=15,
+            target_odds_min=50000,
+            target_odds_max=60000,
+        )
+    )
+
+    # Normal-priced legs survived the band -- not rejected as below_min_odds.
+    assert result["rejectedSummary"].get("below_min_odds", 0) == 0
+    accepted = {c["player"] for c in result["rankedCandidates"]}
+    assert {"Strong Under", "Diverse Under"} <= accepted
+    # The band still drives the blueprint search, just not the per-leg filter.
+    assert result["slipBlueprints"]["targetBand"] == {"min": 50000, "max": 60000}
+
+    # And a per-leg bound, when explicitly asked for, still works.
+    filtered = asyncio.run(
+        build_sgm_candidate_pool_from_boards(
+            boards,
+            CandidateFakeMLBEngine(),
+            date="2026-05-25",
+            side="under",
+            mode="best_available",
+            quality_floor=55,
+            history_limit=15,
+            min_individual_odds=3.0,
+        )
+    )
+    assert filtered["rejectedSummary"].get("below_min_odds", 0) >= 1

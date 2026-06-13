@@ -303,12 +303,17 @@ async def build_sgm_candidate_pool_from_boards(
         _mode_quality_floor(clean_mode) if quality_floor is None else float(quality_floor)
     )
 
+    # Per-leg odds bounds come ONLY from min/maxIndividualOdds. The slip-level
+    # target band (targetOddsMin/Max) must NOT filter individual legs -- in the
+    # thesis-block flow you want normal-priced legs that MULTIPLY up to the band,
+    # so applying the band per leg would reject every normal row before any block
+    # can form. The band drives the blueprint decomposition only (below).
     flat_rows, initial_rejections = _flatten_board_rows(
         boards[:max_games],
         side=clean_side,
         market_filter=wanted_markets,
-        min_odds=min_individual_odds or target_odds_min,
-        max_odds=max_individual_odds or target_odds_max,
+        min_odds=min_individual_odds,
+        max_odds=max_individual_odds,
         max_board_age_seconds=max_board_age_seconds,
     )
     prop_payload = _props_payload_from_rows(flat_rows, date)
