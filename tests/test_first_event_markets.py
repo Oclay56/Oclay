@@ -66,7 +66,7 @@ def test_logged_first_market_is_flagged_not_misgraded():
     assert "first-event" in detail["reason"].lower()
 
 
-def test_candidate_pool_holds_first_markets_out_of_picks():
+def test_candidate_pool_excludes_first_markets_outright():
     from app.sgm_candidate_pool import build_sgm_candidate_pool_from_boards
     from tests.test_sgm_candidate_pool import CandidateFakeMLBEngine, _fresh_captured_at, _row
 
@@ -88,11 +88,10 @@ def test_candidate_pool_holds_first_markets_out_of_picks():
             mode="best_available", quality_floor=0, history_limit=15,
         )
     )
-    optional = result["optionalSequenceMarkets"]
-    assert optional["gradeable"] is False
-    assert optional["count"] == 1
-    assert optional["markets"][0]["normalizedMarketKey"] == "first_home_run"
-    # And it never appears in the researched, rankable pick set.
+    # Dropped entirely: counted under a clear exclusion reason, never surfaced,
+    # and never in the rankable pick set -- and no optional lane in the response.
+    assert "optionalSequenceMarkets" not in result
+    assert result["rejectedSummary"].get("first_event_market_excluded") == 1
     assert all(
         c.get("normalizedMarketKey") != "first_home_run"
         for c in result["rankedCandidates"]

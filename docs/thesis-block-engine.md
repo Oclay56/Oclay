@@ -97,23 +97,27 @@ relationships) and sharpens as real slips settle.
 ## 6a. First-event markets (first hit / run / home run)
 
 Stake exposes first-event props under the backend keys `first_h`, `first_r`,
-`first_hr`. These are **recognized but quarantined** in a separate lane:
+`first_hr`. These are **excluded outright** — they are not gradeable via counting
+stats (settling them needs play-by-play event ordering) and carry no usable
+signal in the counting-stat model, so feeding them through would only create a
+catch-22 (never gradeable → never any realized data → the kill-switch can never
+judge them). The decision was to drop them, not to keep them in limbo.
+
+They are still *recognized* purely as a safety measure:
 
 - They normalize to canonical keys `first_hit` / `first_run` / `first_home_run`
-  ([market_normalization.py](../app/market_normalization.py)). Spelled-out
+  ([market_normalization.py](../app/market_normalization.py)), and spelled-out
   display labels ("First Home Run") are aliased too, so they can **never leak
   into `hits` / `home_runs` and be misgraded** as a counting-stat total.
-- They are **held out of the researched pick set** and surfaced in the candidate
-  pool's `optionalSequenceMarkets` section — available for deliberate, on-thesis
-  use, flagged high-variance and `gradeable: false`.
-- They are in the sequence/lottery risk class (probability shrink + one per
-  block) if ever used in a block.
-- Grading **skips** them with the clear reason `sequence_market_pending_grader`
-  rather than settling them wrong, so the ROI/calibration loop is never poisoned.
+- The candidate pool **drops them** under the clear reason
+  `first_event_market_excluded` (counted in `rejectedSummary`, never surfaced,
+  never in the pick set).
+- If one is ever logged by hand, grading **skips** it with the reason
+  `sequence_market_pending_grader` instead of settling it wrong, so the
+  ROI/calibration loop is never poisoned.
 
-Settling them correctly needs a play-by-play first-event grader (a planned
-follow-up). RBI, by contrast, is an ordinary counting stat and is a fully
-supported, gradeable, standard pick.
+RBI, by contrast, is an ordinary counting stat and is a fully supported,
+gradeable, standard pick.
 
 ## 7. Surfaces
 
