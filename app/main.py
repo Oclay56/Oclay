@@ -1155,8 +1155,15 @@ async def mlb_stake_ui_sgm_candidate_pool(
         "fixtureCount": board_batch.get("fixtureCount"),
         "succeeded": board_batch.get("succeeded"),
         "failed": board_batch.get("failed"),
+        "rateLimited": board_batch.get("rateLimited", False),
         "errors": board_batch.get("errors") or [],
     }
+    if board_batch.get("rateLimited"):
+        pool.setdefault("notes", []).append(
+            "Stake rate-limited the SGM board reads (HTTP 429 / IP-block). The "
+            "remaining fixtures were skipped to avoid digging deeper — cool down a "
+            "few minutes and scan fewer games per batch before retrying."
+        )
     pool["ledger"] = _record_pool_to_ledger(
         pool,
         slate_date.isoformat() if slate_date else None,

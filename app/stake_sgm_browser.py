@@ -231,6 +231,43 @@ def read_stake_sgm_board(
         )
 
 
+# Default spacing between per-fixture SGM board reads. Stake rate-limits the
+# replay endpoint, so firing every fixture back-to-back trips a 429/IP-block.
+# Tunable via OCLAY_SGM_BOARD_THROTTLE_SECONDS.
+SGM_BOARD_THROTTLE_SECONDS = 0.6
+
+
+class StakeRateLimited(RuntimeError):
+    """Stake rate-limited or IP-blocked the SGM board replay read."""
+
+
+def _replay_block_message(status: int, text: str) -> str | None:
+    """A clear message when a non-200 replay response is a rate-limit/IP-block."""
+    lowered = (text or "").lower()
+    if (
+        status == 429
+        or status == 503
+        or "ip-blocked" in lowered
+        or "too many requests" in lowered
+        or "under maintenance" in lowered
+    ):
+        return (
+            f"Stake rate-limited the SGM board read (HTTP {status}); the IP is "
+            "temporarily blocked. Cool down a few minutes and scan fewer games "
+            "per batch before retrying."
+        )
+    return None
+
+
+def _board_throttle_seconds() -> float:
+    raw = os.getenv("OCLAY_SGM_BOARD_THROTTLE_SECONDS")
+    try:
+        value = float(raw) if raw not in (None, "") else SGM_BOARD_THROTTLE_SECONDS
+    except (TypeError, ValueError):
+        value = SGM_BOARD_THROTTLE_SECONDS
+    return max(0.0, min(value, 10.0))
+
+
 def read_stake_sgm_boards_batch(
     *,
     fixture_slugs: list[str],
@@ -244,10 +281,31 @@ def read_stake_sgm_boards_batch(
     ][: max(1, min(int(max_fixtures or 20), 20))]
     boards: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
+    throttle = _board_throttle_seconds()
+    rate_limited = False
 
-    for fixture_slug in clean_slugs:
+    for index, fixture_slug in enumerate(clean_slugs):
+        if index and throttle:
+            # Space reads out so Stake's rate limiter is not tripped by a burst.
+            time.sleep(throttle)
         try:
             boards.append(read_stake_sgm_board(fixture_slug, cdp_url=cdp_url))
+        except StakeRateLimited as exc:
+            rate_limited = True
+            errors.append(
+                {"fixtureSlug": fixture_slug, "status": "rate_limited", "message": str(exc)}
+            )
+            # Circuit-break: once Stake blocks us, every remaining read will 429
+            # too and dig the hole deeper. Stop and report instead of hammering.
+            for remaining in clean_slugs[index + 1:]:
+                errors.append(
+                    {
+                        "fixtureSlug": remaining,
+                        "status": "skipped",
+                        "message": "skipped after Stake rate-limit; cool down before retrying",
+                    }
+                )
+            break
         except Exception as exc:
             errors.append(
                 {
@@ -263,6 +321,8 @@ def read_stake_sgm_boards_batch(
         "fixtureCount": len(clean_slugs),
         "succeeded": len(boards),
         "failed": len(errors),
+        "rateLimited": rate_limited,
+        "throttleSeconds": throttle,
         "boards": boards,
         "errors": errors,
     }
@@ -4330,6 +4390,9 @@ def _fetch_sgm_board_in_browser(page: Any, fixture_slug: str) -> dict[str, Any]:
     )
 
     if result["status"] != 200:
+        block = _replay_block_message(result["status"], result["text"])
+        if block:
+            raise StakeRateLimited(block)
         raise RuntimeError(
             f"Stake SGM replay returned HTTP {result['status']}: "
             f"{result['text'][:300]}"
