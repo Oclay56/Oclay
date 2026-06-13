@@ -94,6 +94,27 @@ Honest dependency: the cross-block copula and per-thesis learning need graded
 volume. The engine launches on *structural* correlation (known stat
 relationships) and sharpens as real slips settle.
 
+## 6a. First-event markets (first hit / run / home run)
+
+Stake exposes first-event props under the backend keys `first_h`, `first_r`,
+`first_hr`. These are **recognized but quarantined** in a separate lane:
+
+- They normalize to canonical keys `first_hit` / `first_run` / `first_home_run`
+  ([market_normalization.py](../app/market_normalization.py)). Spelled-out
+  display labels ("First Home Run") are aliased too, so they can **never leak
+  into `hits` / `home_runs` and be misgraded** as a counting-stat total.
+- They are **held out of the researched pick set** and surfaced in the candidate
+  pool's `optionalSequenceMarkets` section — available for deliberate, on-thesis
+  use, flagged high-variance and `gradeable: false`.
+- They are in the sequence/lottery risk class (probability shrink + one per
+  block) if ever used in a block.
+- Grading **skips** them with the clear reason `sequence_market_pending_grader`
+  rather than settling them wrong, so the ROI/calibration loop is never poisoned.
+
+Settling them correctly needs a play-by-play first-event grader (a planned
+follow-up). RBI, by contrast, is an ordinary counting stat and is a fully
+supported, gradeable, standard pick.
+
 ## 7. Surfaces
 
 - The live `/mlb/stake-ui/sgm-candidate-pool` endpoint now returns a

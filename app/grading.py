@@ -16,6 +16,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
+from .market_normalization import is_optional_sequence_market
 from .mlb_bridge import stat_mapping_for_market, stat_value_from_stats
 from .mlb_props import slug_key
 from .pick_ledger import GRADE_LOSS, GRADE_PUSH, GRADE_VOID, GRADE_WIN, PickLedger
@@ -30,6 +31,7 @@ REASON_FETCH = "fetch_error"
 REASON_INVALID = "invalid_pick"
 REASON_NO_PLAYER = "no_player_id"
 REASON_UNMAPPED = "unmapped_market"
+REASON_SEQUENCE = "sequence_market_pending_grader"
 
 _WAITING_REASONS = {REASON_NO_GAME, REASON_NO_STAT, REASON_FETCH}
 
@@ -45,6 +47,7 @@ _REASON_TEXT = {
     REASON_INVALID: "incomplete pick data (line/side/date)",
     REASON_NO_PLAYER: "player not matched to an MLB id",
     REASON_UNMAPPED: "market not recognized",
+    REASON_SEQUENCE: "first-event market (first hit/run/HR) -- not auto-gradable yet",
 }
 
 
@@ -285,7 +288,12 @@ async def _grade_one(
     if person_id is None:
         return ("skip", REASON_NO_PLAYER)
 
-    mapping = stat_mapping_for_market(str(pick.get("market_key") or ""))
+    market_key = str(pick.get("market_key") or "")
+    if is_optional_sequence_market(market_key):
+        # First-event market: never settle it against a counting-stat total.
+        # It needs a play-by-play grader; until then it is held, not misgraded.
+        return ("skip", REASON_SEQUENCE)
+    mapping = stat_mapping_for_market(market_key)
     if not mapping.get("statKey") and not mapping.get("statFormula"):
         return ("skip", REASON_UNMAPPED)
     group = str(mapping.get("group") or "hitting")

@@ -9,7 +9,7 @@ from .exposure import slate_exposure_report
 from .quote_model import slip_projection
 from .decision_profiles import evidence_check, evidence_windows, season_evidence, trend_labels
 from .mlb_bridge import enrich_props_with_mlb_data, stat_mapping_for_market
-from .market_normalization import normalize_mlb_prop_market_key
+from .market_normalization import is_optional_sequence_market, normalize_mlb_prop_market_key
 from .matchup_model import sharpen_mean
 from .mlb_props import slug_key
 from .probability_engine import (
@@ -323,6 +323,7 @@ async def build_sgm_candidate_pool_from_boards(
 
     enriched_by_id = {str(prop.get("propId") or ""): prop for prop in enriched.get("props") or []}
     scored_rows = []
+    optional_sequence_rows: list[dict[str, Any]] = []
     rejected = Counter(initial_rejections)
     market_policies = get_active_market_policies()
     killed_markets: set[str] = set()
@@ -330,6 +331,14 @@ async def build_sgm_candidate_pool_from_boards(
     for row in flat_rows:
         enriched_prop = enriched_by_id.get(str(row.get("propId") or "")) or {}
         candidate = _candidate_from_enriched_row(row, enriched_prop)
+        # First-event markets (first hit/run/home run) are recognized but not
+        # gradeable via counting stats. Route them to the optional lane so they
+        # are surfaced for awareness without entering the researched pick set or
+        # ever being graded as the wrong (counting-stat) bet.
+        if is_optional_sequence_market(candidate.get("normalizedMarketKey")):
+            optional_sequence_rows.append(_optional_sequence_record(candidate))
+            rejected["optional_sequence_market_held_out"] += 1
+            continue
         score = score_sgm_candidate(
             candidate,
             mode=clean_mode,
@@ -485,6 +494,20 @@ async def build_sgm_candidate_pool_from_boards(
         "marketExposure": dict(Counter(row["normalizedMarketKey"] for row in ranked)),
         "marketConcentration": market_concentration,
         "slipBlueprints": slip_blueprints,
+        "optionalSequenceMarkets": {
+            "gradeable": False,
+            "variance": "high",
+            "count": len(optional_sequence_rows),
+            "markets": optional_sequence_rows,
+            "note": (
+                "First-event markets (first hit/run/home run, Stake keys "
+                "first_h/first_r/first_hr) detected on the board. They are "
+                "optional and high-variance: settling them needs play-by-play "
+                "event ordering, so they are held out of the researched pick set "
+                "and are not auto-graded yet. Use deliberately on-thesis; they "
+                "are never scored as a counting-stat total."
+            ),
+        },
         "marketContest": market_contest,
         "gameContest": game_contest,
         "contextCoverage": _context_coverage(ranked),
@@ -1950,6 +1973,28 @@ def _apply_game_level_contest(
         "readyFixtureGroups": ready_groups,
         "insufficientFixtureGroups": insufficient_groups,
         "fixtures": fixture_summaries,
+    }
+
+
+def _optional_sequence_record(candidate: dict[str, Any]) -> dict[str, Any]:
+    """A lean, awareness-only record for a first-event market on the board."""
+    return {
+        "fixtureSlug": candidate.get("fixtureSlug"),
+        "matchup": candidate.get("matchup"),
+        "rowId": candidate.get("rowId"),
+        "player": candidate.get("player"),
+        "team": candidate.get("team"),
+        "market": candidate.get("market"),
+        "normalizedMarketKey": candidate.get("normalizedMarketKey"),
+        "side": candidate.get("side"),
+        "line": candidate.get("line"),
+        "odds": candidate.get("odds"),
+        "mlbPersonId": candidate.get("mlbPersonId"),
+        "identityResolution": candidate.get("identityResolution"),
+        "marketClass": "optional_sequence",
+        "gradeable": False,
+        "variance": "high",
+        "reason": "first_event_market_not_auto_gradable_yet",
     }
 
 

@@ -5,6 +5,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from .market_normalization import is_optional_sequence_market
 from .mlb_props import slug_key
 
 
@@ -228,7 +229,7 @@ def stat_mapping_for_market(market_key: str) -> dict[str, Any]:
             result["statFormula"] = mapping["statFormula"]
         return result
 
-    return {
+    result = {
         "marketKey": normalized,
         "group": "pitching" if normalized in PITCHING_MARKET_KEYS else "hitting",
         "statKey": None,
@@ -236,6 +237,14 @@ def stat_mapping_for_market(market_key: str) -> dict[str, Any]:
         "supported": False,
         "contextQuality": "unsupported",
     }
+    if is_optional_sequence_market(normalized):
+        # First-event market: recognized, but settled by play-by-play ordering,
+        # not a counting-stat total. Flag it so it is routed to the optional lane
+        # rather than misgraded as hits/home_runs.
+        result["marketClass"] = "optional_sequence"
+        result["gradeable"] = False
+        result["variance"] = "high"
+    return result
 
 
 def stat_value_from_stats(mapping_or_key: Any, stats: dict[str, Any] | None) -> float | None:

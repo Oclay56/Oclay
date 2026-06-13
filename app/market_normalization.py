@@ -25,6 +25,25 @@ SUPPORTED_MLB_PROP_MARKETS = {
 }
 
 
+# First-event ("first hit / first run / first home run") markets. Stake's
+# backend keys are first_h / first_r / first_hr. These are recognized but held
+# in a separate, higher-variance, NOT-yet-auto-gradable class: settling them
+# correctly needs play-by-play event ordering, which the counting-stat grader
+# does not have. They are surfaced as optional/available markets, kept out of
+# the researched pick set, and never graded against a counting-stat total (which
+# would silently settle them as the wrong bet). See docs/thesis-block-engine.md.
+OPTIONAL_SEQUENCE_MARKETS = {
+    "first_hit",
+    "first_run",
+    "first_home_run",
+}
+
+
+def is_optional_sequence_market(market_key: Any) -> bool:
+    """True for first-event markets (first hit/run/home run) in any form."""
+    return normalize_mlb_prop_market_key(market_key) in OPTIONAL_SEQUENCE_MARKETS
+
+
 MLB_PROP_MARKET_ALIASES = {
     "hit": "hits",
     "hits": "hits",
@@ -123,6 +142,24 @@ MLB_PROP_MARKET_ALIASES = {
     "pitcher-walks": "walks_allowed",
     "pitcher-walks-allowed": "walks_allowed",
     "pitching-walks-allowed": "walks_allowed",
+    # First-event markets. Stake backend keys are first_h / first_r / first_hr
+    # (slugged to first-h / first-r / first-hr). Spelled-out variants are aliased
+    # too so a display-name board row cannot leak into hits/home_runs.
+    "first-h": "first_hit",
+    "first-hit": "first_hit",
+    "1st-hit": "first_hit",
+    "first-to-hit": "first_hit",
+    "first-to-record-a-hit": "first_hit",
+    "first-r": "first_run",
+    "first-run": "first_run",
+    "1st-run": "first_run",
+    "first-run-scored": "first_run",
+    "first-to-score": "first_run",
+    "first-hr": "first_home_run",
+    "first-home-run": "first_home_run",
+    "first-homerun": "first_home_run",
+    "1st-home-run": "first_home_run",
+    "first-to-home-run": "first_home_run",
 }
 
 

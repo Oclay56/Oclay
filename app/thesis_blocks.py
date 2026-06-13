@@ -45,6 +45,9 @@ FAMILY_PENALTY_STEP = 0.015  # softer shave for same broad family
 # "first" / sequence prop detected by name. Their win probability is shrunk
 # toward a coin-flip and at most one may appear per block.
 LOTTERY_MARKETS = {"home_runs", "stolen_bases"}
+# First-event markets (Stake first_h/first_r/first_hr) normalized to canonical
+# keys -- the highest-variance, least-predictable class.
+SEQUENCE_MARKET_KEYS = {"first_hit", "first_run", "first_home_run"}
 SEQUENCE_NAME_HINTS = ("first", "1st", "anytime", "to record", "to hit", "to score")
 SEQUENCE_SHRINK = 0.82  # multiplicative haircut on the win probability used
 SEQUENCE_PER_BLOCK_CAP = 1
@@ -125,7 +128,7 @@ def _raw_win_probability(leg: dict[str, Any]) -> float | None:
 
 def is_sequence_leg(leg: dict[str, Any]) -> bool:
     """A first-X / lottery leg whose edge estimate is the least trustworthy."""
-    if _market_key(leg) in LOTTERY_MARKETS:
+    if _market_key(leg) in LOTTERY_MARKETS or _market_key(leg) in SEQUENCE_MARKET_KEYS:
         return True
     label = str(
         (leg.get("market") if not isinstance(leg.get("market"), dict) else (leg.get("market") or {}).get("name"))
