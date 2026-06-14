@@ -12,6 +12,7 @@ from .mlb_bridge import enrich_props_with_mlb_data, stat_mapping_for_market
 from .market_normalization import is_optional_sequence_market, normalize_mlb_prop_market_key
 from .matchup_model import sharpen_mean
 from .mlb_props import slug_key
+from .stale_line import detect_stale_line
 from .probability_engine import (
     devig_two_way,
     effective_sample_size,
@@ -135,6 +136,20 @@ def _compact_candidate_pool_row(row: dict[str, Any]) -> dict[str, Any]:
         ),
         "reasonTags": list(row.get("reasonTags") or [])[:COMPACT_REASON_TAG_LIMIT],
         "riskFlags": list(row.get("riskFlags") or []),
+        "staleLineSignal": _compact_stale_line(row.get("staleLineSignal")),
+    }
+
+
+def _compact_stale_line(signal: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Keep the stale-line signal only when it actually fired (compact mode)."""
+    if not isinstance(signal, dict) or not signal.get("isStale"):
+        return None
+    return {
+        "isStale": True,
+        "stalenessScore": signal.get("stalenessScore"),
+        "direction": signal.get("direction"),
+        "trigger": signal.get("trigger"),
+        "note": signal.get("note"),
     }
 
 
@@ -210,6 +225,16 @@ def score_sgm_candidate(
     reason_tags.extend(probability_assessment.get("reasonTags") or [])
     reason_tags.extend(reliability_profile.get("reasonTags") or [])
 
+    # Stale-line / latency edge: a confirmed-lineup-slot or weather shift moved
+    # the model toward this side while Stake's line hasn't repriced. Genuine,
+    # time-sensitive value that comes from being faster, so it earns a small,
+    # capped merit bonus on top of the normal probability edge.
+    stale_line = detect_stale_line(candidate, probability_assessment)
+    stale_line_bonus = 0.0
+    if stale_line.get("isStale"):
+        stale_line_bonus = _float_or_none(stale_line.get("scoreBonus")) or 0.0
+        reason_tags.append("stale_line_latency_edge")
+
     if odds is not None and odds < 1.15:
         quota_filler_penalty = 18.0
         risk_flags.append("short_odds_quota_filler")
@@ -235,6 +260,7 @@ def score_sgm_candidate(
         + mode_fit_score * 0.20
         + 10.0
         + probability_adjustment
+        + stale_line_bonus
         - odds_trap_penalty
         - quota_filler_penalty
         - volatility_penalty
@@ -254,6 +280,8 @@ def score_sgm_candidate(
         "stakeMetadataPenalty": round(stake_metadata_penalty, 2),
         "correlationPenalty": round(correlation_penalty, 2),
         "probabilityScoreAdjustment": round(probability_adjustment, 2),
+        "staleLineBonus": round(stale_line_bonus, 2),
+        "staleLineSignal": stale_line,
         "probabilityAssessment": probability_assessment,
         "marketExposurePenalty": 0.0,
         "reliabilityScalar": round(reliability_profile["scalar"], 4),

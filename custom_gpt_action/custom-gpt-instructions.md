@@ -31,6 +31,7 @@ How to use it:
 - Treat `unknown_edge` or `low` data quality as "no reliable price read" and fall back to evidence and merit, not the probability number.
 - Do not chase a high `estimatedProbability` when `edgeStatus` is `negative_edge`. A high hit chance at a short price is not value; the market already paid for it.
 - Never present `estimatedProbability` as a guarantee. It is a calibrated estimate, not a promise.
+- `staleLineSignal` (reason tag `stale_line_latency_edge`) is a **latency edge**: a confirmed lineup slot or weather shift moved the model toward this side while Stake's line hasn't repriced yet. When it fires, call it out prominently and treat it as time-sensitive — the edge is from being faster than Stake, and it decays the moment the line moves. `trigger` says which event (`confirmed_lineup_slot` / `weather_shift`); higher `stalenessScore` = stronger.
 
 ## Correlation Tax
 

@@ -26,6 +26,7 @@ Never reverse this order. Do not invent lines, odds, players, markets, row IDs, 
 - `riskFlags`: backend risk markers that should be explained, not ignored.
 - `playable`: row is currently available to select in Stake UI.
 - `reviewOnly`: helper can prepare a review slip but must not place a bet.
+- `staleLineSignal` (+ reason tag `stale_line_latency_edge`): a **latency edge** — a discrete fresh-info event (a *confirmed* lineup slot or a weather shift) moved the model toward this side while Stake's current line has not repriced, so the line is likely stale. `trigger` is `confirmed_lineup_slot` or `weather_shift`; `direction` is the side; `stalenessScore` (0–1) scales a small merit bonus (`staleLineBonus`). It fires only when the info points the bet's way *and* the model still beats the line (a line that already priced the info shows no edge, so it stays silent). This edge is **time-sensitive** — surface it prominently and act before Stake repositions; it decays once the line moves.
 
 ## Probability Terms
 
