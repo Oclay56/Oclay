@@ -221,6 +221,26 @@ def slip_probability_and_ev(legs: list[dict[str, Any]]) -> dict[str, Any]:
     independence_ev = (
         independence * (product_odds - 1.0) - (1.0 - independence) if probs else None
     )
+
+    # EV under uncertainty. Each leg's probability is an estimate with an error
+    # bar; across many legs those errors compound multiplicatively, so a slip
+    # that looks +EV at the point estimate can be sharply -EV at the low bound.
+    # Evaluate the joint at every leg's lower and upper bound to bracket it.
+    win_prob_range = None
+    ev_range = None
+    ev_downside = None
+    has_band = False
+    if probs:
+        joint_low = _joint_at(priced, 0)
+        joint_high = _joint_at(priced, 2)
+        ev_low = joint_low * (product_odds - 1.0) - (1.0 - joint_low)
+        ev_high = joint_high * (product_odds - 1.0) - (1.0 - joint_high)
+        win_prob_range = [round(joint_low, 4), round(joint_high, 4)]
+        ev_range = [round(ev_low, 4), round(ev_high, 4)]
+        ev_downside = round(ev_low, 4)
+        has_band = any(
+            (b := _prob_bounds(leg)) is not None and b[2] - b[0] > 1e-6 for leg in priced
+        )
     return {
         "legCount": len(legs),
         "pricedLegCount": len(priced),
@@ -233,6 +253,10 @@ def slip_probability_and_ev(legs: list[dict[str, Any]]) -> dict[str, Any]:
         if independence_ev is not None
         else None,
         "expectedValuePerUnit": round(expected_value, 4) if expected_value is not None else None,
+        "winProbabilityRange": win_prob_range,
+        "expectedValueRange": ev_range,
+        "evDownsidePerUnit": ev_downside,
+        "uncertaintyFromLegIntervals": has_band,
         "effectiveCorrelation": round(effective_rho, 4),
         "blockCount": block_count,
         "correlation": correlation,
@@ -444,6 +468,57 @@ def _odds(leg: dict[str, Any]) -> float | None:
     if value is not None and value > 1.0:
         return value
     return None
+
+
+def _assessment(leg: dict[str, Any]) -> dict[str, Any]:
+    a = leg.get("probabilityAssessment")
+    return a if isinstance(a, dict) else {}
+
+
+def _prob_bounds(leg: dict[str, Any]) -> tuple[float, float, float] | None:
+    """(low, point, high) win-probability bounds for a leg.
+
+    Uses the per-leg confidence interval the candidate engine already fits (a
+    thin sample -> a wide interval). Legs with no interval contribute no band
+    (low == point == high), so they neither widen nor narrow the slip range.
+    """
+    point = _win_probability(leg)
+    if point is None:
+        return None
+    ci = leg.get("confidenceInterval")
+    if not isinstance(ci, dict):
+        ci = _assessment(leg).get("confidenceInterval")
+    low = high = None
+    if isinstance(ci, dict):
+        low = _float_or_none(ci.get("low"))
+        high = _float_or_none(ci.get("high"))
+        if low is None:
+            low = _float_or_none(ci.get("conservativeProbability"))
+    if low is None:
+        low = _float_or_none(leg.get("conservativeWinProbability")) or _float_or_none(
+            _assessment(leg).get("conservativeWinProbability")
+        )
+    if low is not None and high is None:
+        high = point + (point - low)  # reflect the lower bound for a symmetric band
+    if low is None:
+        low = point
+    if high is None:
+        high = point
+    lo = max(0.0, min(1.0, min(low, point, high)))
+    hi = max(0.0, min(1.0, max(low, point, high)))
+    return (lo, point, hi)
+
+
+def _joint_at(priced: list[dict[str, Any]], index: int) -> float:
+    """Block-structured joint with each leg's probability taken at one bound
+    (0=low, 1=point, 2=high). Correlation is unaffected -- it depends on the
+    players/markets, not the probability value -- so only the marginals move."""
+    substituted = []
+    for leg in priced:
+        bounds = _prob_bounds(leg)
+        prob = bounds[index] if bounds else _win_probability(leg)
+        substituted.append({**leg, "winProbability": prob})
+    return _block_structured_joint(substituted)
 
 
 # ----------------------------------------------------------------------

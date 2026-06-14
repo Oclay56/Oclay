@@ -37,6 +37,21 @@ HITTING_VOLUME_MARKETS = {
     "hits_runs_rbis",
 }
 
+# Counting-stat markets that scale ~linearly with plate appearances, so today's
+# batting-order slot (which sets expected PA) maps cleanly onto the per-game
+# mean. runs/rbi are excluded on purpose: their lineup dependence is run/RBI
+# *opportunity*, not raw PA, and is handled as a separate probability lean.
+PA_VOLUME_MARKETS = {"hits", "singles", "total_bases", "home_runs"}
+
+# Expected plate appearances per game by batting-order slot (league-typical).
+# The 1-hole turns over ~0.9 more PA/game than the 9-hole -- a real volume
+# swing that a flat threshold nudge cannot express.
+LINEUP_PA_BY_SPOT = {
+    1: 4.65, 2: 4.55, 3: 4.45, 4: 4.34, 5: 4.24,
+    6: 4.13, 7: 4.01, 8: 3.89, 9: 3.77,
+}
+LINEUP_PA_BOUND = (0.88, 1.10)
+
 # Modern MLB league-average batter strikeout rate per plate appearance.
 LEAGUE_BATTER_K_RATE = 0.222
 DEFAULT_BATTER_PA_PER_GAME = 4.1
@@ -114,6 +129,11 @@ def sharpen_mean(
         mean *= park["factor"]
         adjustments.append(park)
 
+    lineup = _lineup_pa_factor(market, candidate)
+    if lineup is not None:
+        mean *= lineup["factor"]
+        adjustments.append(lineup)
+
     weather = _weather_factor(market, candidate)
     if weather is not None:
         mean *= weather["factor"]
@@ -184,6 +204,39 @@ def _handedness_factor(market: str, candidate: dict[str, Any]) -> dict[str, Any]
         "metric": "ops",
         "splitOps": round(metric_hand, 4),
         "baselineOps": round(baseline, 4),
+        "rawRatio": round(raw, 4),
+        "factor": round(factor, 4),
+    }
+
+
+def _lineup_pa_factor(market: str, candidate: dict[str, Any]) -> dict[str, Any] | None:
+    """Scale the per-game mean by today's batting-order PA expectation.
+
+    The season mean is calibrated to the player's season-average plate-appearance
+    volume. If today's lineup slot turns over more or fewer PA than that baseline,
+    a counting stat moves with it -- a 2-hole regular dropped to 8th loses real
+    volume the season mean does not know about. Letting the distribution see this
+    through the mean is sharper than a flat probability nudge.
+    """
+    if market not in PA_VOLUME_MARKETS:
+        return None
+    lineup = candidate.get("lineupContext") or {}
+    spot = _int_or_none(lineup.get("battingOrder"))
+    if spot is None or spot not in LINEUP_PA_BY_SPOT:
+        return None
+    expected_pa = LINEUP_PA_BY_SPOT[spot]
+    baseline = _batter_pa_per_game(candidate) or DEFAULT_BATTER_PA_PER_GAME
+    if baseline <= 0:
+        return None
+    raw = expected_pa / baseline
+    factor = max(LINEUP_PA_BOUND[0], min(LINEUP_PA_BOUND[1], raw))
+    if abs(factor - 1.0) < 1e-4:
+        return None
+    return {
+        "source": "lineup_spot_pa_volume",
+        "battingOrder": spot,
+        "expectedPaPerGame": expected_pa,
+        "baselinePaPerGame": round(baseline, 3),
         "rawRatio": round(raw, 4),
         "factor": round(factor, 4),
     }
@@ -425,5 +478,14 @@ def _float_or_none(value: Any) -> float | None:
         return None
     try:
         return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _int_or_none(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value)
     except (TypeError, ValueError):
         return None

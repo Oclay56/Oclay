@@ -31,6 +31,48 @@ def test_handedness_platoon_lifts_mean_vs_favorable_hand():
     assert result["mean"] > 1.0
 
 
+def test_lineup_top_spot_lifts_pa_volume_mean():
+    # A 2-hole slot turns over more PA than the player's season baseline (3.8/g),
+    # so the per-game mean for a PA-volume market scales up.
+    candidate = {
+        "normalizedMarketKey": "hits",
+        "lineupContext": {"battingOrder": 2},
+        "seasonSample": {"plateAppearances": 380, "games": 100},  # 3.8 PA/g baseline
+    }
+    result = sharpen_mean(1.0, market_key="hits", candidate=candidate)
+    assert result is not None
+    lineup = next(a for a in result["adjustments"] if a["source"] == "lineup_spot_pa_volume")
+    assert lineup["battingOrder"] == 2
+    assert lineup["factor"] > 1.0
+    assert result["mean"] > 1.0
+
+
+def test_lineup_bottom_spot_cuts_pa_volume_mean():
+    candidate = {
+        "normalizedMarketKey": "total_bases",
+        "lineupContext": {"battingOrder": 9},
+        "seasonSample": {"plateAppearances": 440, "games": 100},  # 4.4 PA/g baseline
+    }
+    result = sharpen_mean(1.5, market_key="total_bases", candidate=candidate)
+    assert result is not None
+    lineup = next(a for a in result["adjustments"] if a["source"] == "lineup_spot_pa_volume")
+    assert lineup["factor"] < 1.0
+    assert result["mean"] < 1.5
+
+
+def test_lineup_pa_factor_does_not_apply_to_non_pa_markets():
+    # runs/rbi lineup dependence is opportunity, not raw PA -> handled elsewhere.
+    candidate = {
+        "normalizedMarketKey": "rbi",
+        "lineupContext": {"battingOrder": 1},
+        "seasonSample": {"plateAppearances": 380, "games": 100},
+    }
+    result = sharpen_mean(0.8, market_key="rbi", candidate=candidate)
+    assert result is None or not any(
+        a["source"] == "lineup_spot_pa_volume" for a in result["adjustments"]
+    )
+
+
 def test_park_factor_applies_for_known_venue():
     candidate = {
         "normalizedMarketKey": "home_runs",

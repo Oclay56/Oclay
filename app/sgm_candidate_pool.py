@@ -958,6 +958,11 @@ def _matchup_factor(candidate: dict[str, Any], side: str) -> dict[str, Any]:
     lineup = candidate.get("lineupContext") or {}
     batting_order = _int_or_none(lineup.get("battingOrder"))
     if batting_order is not None:
+        # Pure PA-volume markets (hits/singles/total_bases/home_runs) are handled
+        # upstream by the lineup-spot PA factor in matchup_model.sharpen_mean,
+        # which scales the per-game mean and lets the distribution price it --
+        # sharper than a flat nudge and avoids double-counting. Here we keep only
+        # the run/RBI *opportunity* lean, which is not pure plate-appearance volume.
         if market_key in {"runs", "hits_runs_rbis"}:
             if batting_order <= 2:
                 add_over_delta(0.04, "lineupContext", "top order supports run/HRR volume")
@@ -968,11 +973,6 @@ def _matchup_factor(candidate: dict[str, Any], side: str) -> dict[str, Any]:
                 add_over_delta(0.04, "lineupContext", "middle order supports RBI volume")
             elif batting_order in {1, 8, 9}:
                 add_over_delta(-0.03, "lineupContext", "lineup spot suppresses RBI volume")
-        elif market_key in {"hits", "singles", "total_bases", "home_runs"}:
-            if batting_order <= 3:
-                add_over_delta(0.03, "lineupContext", "top order adds plate appearance volume")
-            elif batting_order >= 8:
-                add_over_delta(-0.04, "lineupContext", "bottom order cuts plate appearance volume")
 
     pitcher_context = candidate.get("opponentPitcherContext") or {}
     if pitcher_context.get("status") == "available":

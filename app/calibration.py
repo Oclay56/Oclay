@@ -60,6 +60,7 @@ def build_calibration_report(
     corrections = _fit_all_corrections(samples)
     market_policies = build_market_policies(graded)
     thesis_policies = build_thesis_policies(ledger.decided_slips_with_legs())
+    clv = ledger.clv_by_market()
     if persist:
         if corrections:
             ledger.save_calibrations(corrections)
@@ -69,6 +70,8 @@ def build_calibration_report(
     return {
         "purpose": "probability_calibration_report",
         "gradedSamples": len(samples),
+        "clvOverall": clv["overall"],
+        "clvByMarket": clv["byMarket"],
         "overall": overall,
         "byMarket": by_market,
         "byEdgeStatus": by_edge_status,

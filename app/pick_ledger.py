@@ -495,6 +495,43 @@ class PickLedger:
         with self._connect() as conn:
             return [dict(row) for row in conn.execute(query, params).fetchall()]
 
+    def clv_by_market(self) -> dict[str, Any]:
+        """Average closing-line value per market over every pick with a closing
+        snapshot -- settled or not.
+
+        CLV needs only the open and closing price, not the game result, so it
+        measures whether the model beats the market weeks before slow lottery
+        parlays settle. It is the most sample-efficient proof of edge we have:
+        consistently positive CLV is real edge; negative CLV means no strategy
+        downstream can rescue the picks. Surfaced as the Trainer headline.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT market_key, odds, closing_odds FROM picks "
+                "WHERE closing_odds IS NOT NULL"
+            ).fetchall()
+        by_market: dict[str, list[float]] = {}
+        all_clv: list[float] = []
+        for row in rows:
+            clv = _compute_clv(row["odds"], row["closing_odds"])
+            if clv is None:
+                continue
+            by_market.setdefault(str(row["market_key"] or "unknown"), []).append(clv)
+            all_clv.append(clv)
+
+        def _agg(vals: list[float]) -> dict[str, Any]:
+            n = len(vals)
+            return {
+                "samples": n,
+                "avgClv": round(sum(vals) / n, 4) if n else None,
+                "beatCloseRate": round(sum(1 for v in vals if v > 0) / n, 4) if n else None,
+            }
+
+        return {
+            "overall": _agg(all_clv),
+            "byMarket": {market: _agg(vals) for market, vals in by_market.items()},
+        }
+
     def players_missing_person_id(self) -> list[str]:
         """Distinct player names on picks that have no MLB id yet.
 
