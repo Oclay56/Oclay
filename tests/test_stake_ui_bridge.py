@@ -852,6 +852,7 @@ def test_stake_ui_sgm_candidate_pool_compact_mode_trims_nested_context():
         "reasonTags",
         "riskFlags",
         "staleLineSignal",
+        "sharpLineSignal",
     }
     assert len(row["reasonTags"]) <= 3
     assert row["availabilityRole"] == "eligibility_only"

@@ -12,6 +12,7 @@ from .mlb_bridge import enrich_props_with_mlb_data, stat_mapping_for_market
 from .market_normalization import is_optional_sequence_market, normalize_mlb_prop_market_key
 from .matchup_model import sharpen_mean
 from .mlb_props import slug_key
+from .sharp_lines import sharp_line_edge
 from .stale_line import detect_stale_line
 from .probability_engine import (
     devig_two_way,
@@ -137,6 +138,7 @@ def _compact_candidate_pool_row(row: dict[str, Any]) -> dict[str, Any]:
         "reasonTags": list(row.get("reasonTags") or [])[:COMPACT_REASON_TAG_LIMIT],
         "riskFlags": list(row.get("riskFlags") or []),
         "staleLineSignal": _compact_stale_line(row.get("staleLineSignal")),
+        "sharpLineSignal": _compact_sharp_line(row.get("sharpLineSignal")),
     }
 
 
@@ -150,6 +152,20 @@ def _compact_stale_line(signal: dict[str, Any] | None) -> dict[str, Any] | None:
         "direction": signal.get("direction"),
         "trigger": signal.get("trigger"),
         "note": signal.get("note"),
+    }
+
+
+def _compact_sharp_line(signal: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Keep the sharp-line edge only when a sharp line actually matched."""
+    if not isinstance(signal, dict) or not signal.get("matched"):
+        return None
+    return {
+        "matched": True,
+        "edge": signal.get("edge"),
+        "direction": signal.get("direction"),
+        "sharpFairProbability": signal.get("sharpFairProbability"),
+        "stakeImpliedProbability": signal.get("stakeImpliedProbability"),
+        "book": signal.get("book"),
     }
 
 
@@ -235,6 +251,20 @@ def score_sgm_candidate(
         stale_line_bonus = _float_or_none(stale_line.get("scoreBonus")) or 0.0
         reason_tags.append("stale_line_latency_edge")
 
+    # Avenue 2: line-shop against the sharp no-vig price. When Stake's price beats
+    # the sharpest market on the board, that gap is the most reliable edge there
+    # is -- it earns the largest (still capped) merit bonus. No sharp data -> no
+    # signal, no effect.
+    sharp_line = sharp_line_edge(candidate)
+    sharp_line_bonus = 0.0
+    if sharp_line.get("matched"):
+        direction = sharp_line.get("direction")
+        if direction == "beats_sharp_consensus":
+            sharp_line_bonus = _float_or_none(sharp_line.get("scoreBonus")) or 0.0
+            reason_tags.append("beats_sharp_consensus")
+        elif direction == "worse_than_sharp_consensus":
+            risk_flags.append("priced_over_sharp_consensus")
+
     if odds is not None and odds < 1.15:
         quota_filler_penalty = 18.0
         risk_flags.append("short_odds_quota_filler")
@@ -261,6 +291,7 @@ def score_sgm_candidate(
         + 10.0
         + probability_adjustment
         + stale_line_bonus
+        + sharp_line_bonus
         - odds_trap_penalty
         - quota_filler_penalty
         - volatility_penalty
@@ -282,6 +313,8 @@ def score_sgm_candidate(
         "probabilityScoreAdjustment": round(probability_adjustment, 2),
         "staleLineBonus": round(stale_line_bonus, 2),
         "staleLineSignal": stale_line,
+        "sharpLineBonus": round(sharp_line_bonus, 2),
+        "sharpLineSignal": sharp_line,
         "probabilityAssessment": probability_assessment,
         "marketExposurePenalty": 0.0,
         "reliabilityScalar": round(reliability_profile["scalar"], 4),

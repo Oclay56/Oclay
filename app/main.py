@@ -56,6 +56,7 @@ from .grading import grade_pending_picks
 from .pick_ledger import PickLedger
 from .probability_engine import invalidate_calibration_cache
 from .real_quote import real_quote_check_from_result
+from .sharp_lines import get_active_sharp_lines, record_sharp_lines
 from .timing import build_timing_plan, games_from_mlb_schedule
 from .slate import DEFAULT_TIMEZONE
 from .stake_client import StakeAPIError, StakeClient, build_http_client
@@ -1709,6 +1710,40 @@ async def oclay_timing_plan(
         schedule = await _call_data_sources(engine.get_schedule, slate_date.isoformat())
         games = games_from_mlb_schedule(schedule)
     return build_timing_plan(games)
+
+
+@app.post("/oclay/sharp-lines")
+async def oclay_sharp_lines_ingest(
+    payload: dict[str, Any] = Body(default_factory=dict),
+) -> dict[str, Any]:
+    """Ingest a sharp-book line snapshot for Avenue 2 line-shopping.
+
+    Pass ``lines`` (or ``entries``) as a list of rows, each with ``player``,
+    ``market``, ``line``, and the two-way ``over`` / ``under`` decimal odds (plus
+    optional ``book`` / ``capturedAt``). The candidate pool then flags any Stake
+    price that beats the sharp no-vig line. Persists to ``OCLAY_SHARP_LINES_PATH``
+    when set, and is live for the current process immediately.
+    """
+    entries = payload.get("lines")
+    if entries is None:
+        entries = payload.get("entries") or payload.get("rows") or []
+    result = record_sharp_lines(entries)
+    return {"purpose": "oclay_sharp_lines_ingest", **result}
+
+
+@app.get("/oclay/sharp-lines/status")
+async def oclay_sharp_lines_status() -> dict[str, Any]:
+    """How many sharp lines are currently loaded for line-shopping."""
+    lines = get_active_sharp_lines()
+    return {
+        "purpose": "oclay_sharp_lines_status",
+        "linesLoaded": len(lines),
+        "active": bool(lines),
+        "note": (
+            "Avenue 2 compares each Stake candidate to the sharp no-vig price. "
+            "With no sharp lines loaded the signal simply does not fire."
+        ),
+    }
 
 
 @app.post("/oclay/learning/model-backtest")
