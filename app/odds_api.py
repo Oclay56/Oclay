@@ -168,12 +168,25 @@ async def fetch_sharp_lines(
     errors: list[dict[str, Any]] = []
     requests_remaining: Any = None
     try:
-        events_resp = await client.get(
-            f"{ODDS_API_BASE}/sports/{sport}/events",
-            params={"apiKey": api_key, "dateFormat": "iso"},
-        )
-        events_resp.raise_for_status()
-        events = events_resp.json() or []
+        try:
+            events_resp = await client.get(
+                f"{ODDS_API_BASE}/sports/{sport}/events",
+                params={"apiKey": api_key, "dateFormat": "iso"},
+            )
+            events_resp.raise_for_status()
+            events = events_resp.json() or []
+        except httpx.HTTPError as exc:
+            # The events list is free, so this is usually a bad key or a network
+            # blip -- return a clean status instead of raising into the caller.
+            return {
+                "entries": [],
+                "events": 0,
+                "bookmaker": bookmaker,
+                "markets": markets,
+                "requestsRemaining": None,
+                "errors": [{"stage": "events", "error": str(exc)}],
+                "error": "events_fetch_failed",
+            }
         if max_events:
             events = events[: int(max_events)]
         for event in events:
@@ -216,11 +229,24 @@ async def fetch_sharp_lines(
 async def refresh_sharp_lines(
     api_key: str | None = None, *, http_client: Any | None = None, max_events: int | None = None
 ) -> dict[str, Any]:
-    """Fetch sharp lines from The Odds API and load them for line-shopping."""
+    """Fetch sharp lines from The Odds API and load them for line-shopping.
+
+    A refresh that comes back empty (out of credits, a network blip, or an empty
+    slate) does NOT overwrite the snapshot already loaded -- line-shopping keeps
+    using the last good lines and resumes cleanly when a later refresh succeeds.
+    Nothing else in the system is affected either way; the signal just goes quiet.
+    """
     fetched = await fetch_sharp_lines(api_key, http_client=http_client, max_events=max_events)
-    recorded = record_sharp_lines(fetched.get("entries") or [])
+    entries = fetched.get("entries") or []
+    if entries:
+        recorded = record_sharp_lines(entries)
+        kept_existing = False
+    else:
+        recorded = {"entries": 0, "persisted": False}
+        kept_existing = True
     return {
         "ingested": recorded,
+        "keptExistingLines": kept_existing,
         "events": fetched.get("events"),
         "bookmaker": fetched.get("bookmaker"),
         "markets": fetched.get("markets"),

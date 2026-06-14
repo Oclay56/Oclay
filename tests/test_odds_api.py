@@ -4,7 +4,15 @@ from __future__ import annotations
 
 import asyncio
 
-from app.odds_api import fetch_sharp_lines, parse_event_odds
+import httpx
+
+from app.odds_api import fetch_sharp_lines, parse_event_odds, refresh_sharp_lines
+from app.sharp_lines import (
+    get_active_sharp_lines,
+    invalidate_sharp_lines_cache,
+    record_sharp_lines,
+    sharp_key,
+)
 
 
 def _single_book_event(event_id="evt1"):
@@ -133,3 +141,44 @@ def test_fetch_without_a_key_is_a_clean_no_op():
     result = asyncio.run(fetch_sharp_lines(api_key=""))
     assert result["error"] == "no_api_key"
     assert result["entries"] == []
+
+
+class _OutOfCreditsClient:
+    """events list works (free); per-event odds raise (out of credits)."""
+
+    def __init__(self, events):
+        self.events = events
+
+    async def get(self, url, params=None):
+        if url.endswith("/events"):
+            return _Resp(self.events)
+        raise httpx.HTTPError("401 OUT_OF_USAGE_CREDITS")
+
+    async def aclose(self):
+        return None
+
+
+def test_out_of_credits_does_not_raise_and_returns_errors():
+    client = _OutOfCreditsClient([{"id": "evt1"}])
+    result = asyncio.run(fetch_sharp_lines(api_key="k", http_client=client))
+    assert result["entries"] == []
+    assert result["errors"]  # the failed odds call is recorded, not raised
+
+
+def test_refresh_keeps_existing_lines_when_a_refresh_comes_back_empty(monkeypatch):
+    # Load a good snapshot first (in-process cache, no file path needed).
+    monkeypatch.delenv("OCLAY_SHARP_LINES_PATH", raising=False)
+    invalidate_sharp_lines_cache()
+    record_sharp_lines(
+        [{"player": "Aaron Judge", "market": "total_bases", "line": 1.5, "over": 1.95, "under": 1.95}]
+    )
+    key = sharp_key("Aaron Judge", "total_bases", 1.5)
+    assert key in get_active_sharp_lines()
+
+    # Now an out-of-credits refresh -> empty entries -> must NOT wipe the snapshot.
+    client = _OutOfCreditsClient([{"id": "evt1"}])
+    result = asyncio.run(refresh_sharp_lines(api_key="k", http_client=client))
+    assert result["keptExistingLines"] is True
+    assert result["ingested"]["entries"] == 0
+    assert key in get_active_sharp_lines()  # last good lines still loaded
+    invalidate_sharp_lines_cache()
