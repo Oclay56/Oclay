@@ -39,7 +39,8 @@ Never reverse this order. Do not invent lines, odds, players, markets, row IDs, 
 - `edgeReference`: `devigged_fair_probability` (preferred) or `raw_implied_probability` (only one side priced; trust less).
 - `dataQuality`: `low`, `medium`, `high`; gates trust in the edge.
 - `correlationPenalty` / `correlationContext`: tax and reason when a leg is redundant with a stronger correlated leg in the same game.
-- `slipProjections.perGame`, `slipProbability`: group-level `estimatedWinProbability`, `expectedValue`, and `correlationLift` from a correlation-aware model.
+- `slipProjections.perGame`, `slipProbability`: group-level `estimatedWinProbability`, `expectedValue`, and `correlationLift` from a correlation-aware model. The joint is **block-structured** — correlation within a game, independence across games — so a multi-game stack is not over-coupled.
+- `winProbabilityRange` / `expectedValueRange` / `evDownsidePerUnit` (**EV under uncertainty**): each leg probability carries an error bar, and across many legs those errors compound, so the slip's win probability and EV are reported as a range, not a single deceptively-precise number. A slip can read +EV at the point estimate while `evDownsidePerUnit` is sharply negative — show the range so the downside is honest, especially on big multi-leg stacks.
 - `slipProjections.evMaxByGame`: the expected-value-maximizing leg subset per game, with the `evCurve` showing where EV peaked.
 - `lineCurve` / `lineCurveContest.valueLeaders`: the highest-EV line/side within a player-market; dominated lines are deprioritized.
 - `marketPolicy.killedMarkets`: markets excluded for negative realized ROI over graded picks; rows may be tagged `market_downweighted_negative_realized_edge`.

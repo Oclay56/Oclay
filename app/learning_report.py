@@ -194,57 +194,6 @@ def _print_block_engine_sections(report: dict[str, Any], console: Console) -> No
             console.print(f"[bold red]Losing theses (negative ROI, ≥5 slips):[/] {', '.join(losing)}")
 
 
-def _clv_color(avg: float | None) -> str:
-    if avg is None:
-        return "dim"
-    if avg > 0.005:
-        return "bold green"
-    if avg < -0.005:
-        return "bold red"
-    return "yellow"
-
-
-def _print_clv_headline(console: Console, cal: dict[str, Any]) -> None:
-    """CLV is the headline: it proves edge weeks before lottery parlays settle.
-
-    Positive average CLV (taking longer odds than the line closes at) is real,
-    sample-efficient edge; negative CLV means nothing downstream can save the
-    picks. Shown above Brier/hit-rate on purpose.
-    """
-    overall = cal.get("clvOverall") or {}
-    n = overall.get("samples") or 0
-    if not n:
-        console.print(
-            "  [bold]Closing-line value:[/] [dim]no closing snapshots captured yet[/] - "
-            "record odds near first pitch (the timing 'closing snapshot' rescan) so CLV "
-            "can prove edge before slips settle."
-        )
-        return
-    avg = overall.get("avgClv")
-    beat = overall.get("beatCloseRate")
-    color = _clv_color(avg)
-    console.print(
-        f"  [bold]Closing-line value (edge proof):[/] "
-        f"[{color}]{_pct(avg)} avg CLV[/] | beat close {_pct(beat)} of the time "
-        f"over [bold]{n}[/] priced snapshots"
-    )
-    by_market = cal.get("clvByMarket") or {}
-    ranked = sorted(
-        (m for m in by_market.items() if (m[1].get("samples") or 0) >= 5),
-        key=lambda kv: kv[1].get("avgClv") if kv[1].get("avgClv") is not None else 0.0,
-        reverse=True,
-    )
-    if ranked:
-        best = ranked[0]
-        worst = ranked[-1]
-        console.print(
-            f"    [dim]best:[/] {best[0]} [{_clv_color(best[1].get('avgClv'))}]"
-            f"{_pct(best[1].get('avgClv'))}[/] (n={best[1].get('samples')})   "
-            f"[dim]worst:[/] {worst[0]} [{_clv_color(worst[1].get('avgClv'))}]"
-            f"{_pct(worst[1].get('avgClv'))}[/] (n={worst[1].get('samples')})"
-        )
-
-
 def _print_correlation_mispricing(console: Console, cal: dict[str, Any]) -> None:
     """Where Stake mis-prices correlation -- the structural-overlay hunt.
 
@@ -319,7 +268,6 @@ def print_trainer_report(report: dict[str, Any], *, console: Console | None = No
     cal = report.get("calibrate", {})
     samples = cal.get("gradedSamples", 0) or 0
     console.print("\n[bold]Calibration[/]")
-    _print_clv_headline(console, cal)
     _print_correlation_mispricing(console, cal)
     console.print(f"  Model-scored graded samples: [bold]{samples}[/]")
     console.print(f"  Markets re-corrected: {cal.get('marketsCorrected', 0)}")

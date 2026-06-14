@@ -1,14 +1,9 @@
-"""Timing windows for closing-line snapshots and lineup-confirmation rescans.
+"""Timing windows for lineup-confirmation rescans.
 
-Two edges depend on acting at the right moment, not on the operator
-remembering:
-
-- Closing-line value only accumulates if boards are re-scanned near first
-  pitch. This module flags which games are inside the snapshot window so a
-  scheduler can trigger a rescan and record the closing odds.
-- Lines move most in the 2-4 hours before first pitch as lineups confirm. It
-  also flags games in that lineup window so a rescan catches prices that have
-  not adjusted yet.
+Lines move most in the 2-4 hours before first pitch as lineups confirm. This
+module flags games inside that lineup window so a scheduler can trigger a board
+rescan and catch prices that have not adjusted yet -- the input the stale-line /
+latency detector keys off of.
 
 The functions are pure (given the slate and a clock), so a cron job, the CLI,
 or the API can drive them. The actual board read still flows through the
@@ -20,10 +15,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-
-# Closing snapshot: from this many minutes before first pitch up to this many.
-SNAPSHOT_LEAD_MINUTES = 35
-SNAPSHOT_CLOSE_MINUTES = 4
 
 # Lineup confirmation window before first pitch.
 LINEUP_WINDOW_EARLY_MINUTES = 240
@@ -37,7 +28,6 @@ def build_timing_plan(
 ) -> dict[str, Any]:
     """Classify each game into the action windows it currently sits in."""
     clock = _as_utc(now) or datetime.now(timezone.utc)
-    snapshot_due: list[dict[str, Any]] = []
     lineup_window: list[dict[str, Any]] = []
     upcoming: list[dict[str, Any]] = []
 
@@ -52,31 +42,24 @@ def build_timing_plan(
             "startTime": start.isoformat(),
             "minutesToStart": round(minutes, 1),
         }
-        if SNAPSHOT_CLOSE_MINUTES <= minutes <= SNAPSHOT_LEAD_MINUTES:
-            snapshot_due.append({**entry, "action": "rescan_and_record_closing_snapshot"})
-        elif LINEUP_WINDOW_LATE_MINUTES <= minutes <= LINEUP_WINDOW_EARLY_MINUTES:
+        if LINEUP_WINDOW_LATE_MINUTES <= minutes <= LINEUP_WINDOW_EARLY_MINUTES:
             lineup_window.append({**entry, "action": "rescan_board_for_lineup_moves"})
         elif minutes > LINEUP_WINDOW_EARLY_MINUTES:
             upcoming.append(entry)
 
-    snapshot_due.sort(key=lambda item: item["minutesToStart"])
     lineup_window.sort(key=lambda item: item["minutesToStart"])
     return {
         "purpose": "timing_plan",
         "now": clock.isoformat(),
         "windows": {
-            "snapshotLeadMinutes": SNAPSHOT_LEAD_MINUTES,
-            "snapshotCloseMinutes": SNAPSHOT_CLOSE_MINUTES,
             "lineupEarlyMinutes": LINEUP_WINDOW_EARLY_MINUTES,
             "lineupLateMinutes": LINEUP_WINDOW_LATE_MINUTES,
         },
-        "snapshotDue": snapshot_due,
         "lineupWindow": lineup_window,
         "upcomingCount": len(upcoming),
         "note": (
-            "snapshotDue games should be rescanned and their closing odds recorded "
-            "for CLV; lineupWindow games should be rescanned to catch lineup-driven "
-            "line moves before first pitch."
+            "lineupWindow games should be rescanned to catch lineup-driven line "
+            "moves before first pitch -- the stale-line / latency edge."
         ),
     }
 

@@ -142,8 +142,8 @@ correlation category** (`quote_model.correlation_edge`, fit in
 `pick_ledger.load_quote_model`, bucketed the same way the copula measures phi).
 So the system learns *which structures* Stake misprices, not just an average.
 Every block carries `correlationEdge`; blueprints compound them; the Trainer
-prints the per-category overlay hunt. Like CLV it is real-quote-driven, so it
-sharpens as combined quotes are logged.
+prints the per-category overlay hunt. It is real-quote-driven, so it sharpens as
+combined quotes are logged.
 
 ## 6a. First-event markets (first hit / run / home run)
 

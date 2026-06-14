@@ -3,11 +3,11 @@
 Every reviewed candidate leg and every assembled slip is recorded here
 with its estimated probability, the odds it was seen at, and enough
 identity to grade it later against the real MLB box score. The grading
-engine (app.grading) settles legs win/loss/push and records closing-line
-value; the calibration engine (app.calibration) reads graded picks back
-out to fit the per-market corrections that the probability engine then
-applies. Without this table the scoring constants are unfalsifiable; with
-it they become measurable and self-correcting.
+engine (app.grading) settles legs win/loss/push; the calibration engine
+(app.calibration) reads graded picks back out to fit the per-market
+corrections that the probability engine then applies. Without this table
+the scoring constants are unfalsifiable; with it they become measurable
+and self-correcting.
 
 Storage is SQLite by default (no external dependency, ships with Python)
 and is intentionally append-friendly: a pick is logged at review time,
@@ -198,8 +198,8 @@ class PickLedger:
                 mlb_person_id, player, team, market_key, side, line, odds,
                 implied_probability, fair_probability, estimated_probability, edge,
                 edge_status, score, reliability_band, recorded_at,
-                graded_at, outcome, actual_value, closing_odds, clv
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL, NULL)
+                graded_at, outcome, actual_value
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL)
             ON CONFLICT(pick_key) DO NOTHING
             """,
             (
@@ -285,9 +285,9 @@ class PickLedger:
                             mlb_person_id, player, team, market_key, side, line, odds,
                             implied_probability, fair_probability, estimated_probability, edge,
                             edge_status, score, reliability_band, recorded_at,
-                            graded_at, outcome, actual_value, closing_odds, clv
+                            graded_at, outcome, actual_value
                         ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, ?, ?, ?, NULL,
-                                  NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, ?, NULL, NULL)
+                                  NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, ?)
                         ON CONFLICT(pick_key) DO NOTHING
                         """,
                         (
@@ -380,26 +380,6 @@ class PickLedger:
             )
         return 1
 
-    def record_closing_snapshot(self, snapshots: Iterable[dict[str, Any]]) -> dict[str, Any]:
-        """Update pending picks with the odds seen near first pitch (for CLV)."""
-        updated = 0
-        with self._connect() as conn:
-            for snap in snapshots:
-                row_id = snap.get("rowId")
-                closing = _float_or_none(snap.get("odds") or snap.get("closingOdds"))
-                if not row_id or closing is None:
-                    continue
-                cur = conn.execute(
-                    """
-                    UPDATE picks SET closing_odds = ?
-                    WHERE row_id = ? AND outcome = ? AND closing_odds IS NULL
-                    """,
-                    (closing, row_id, PENDING),
-                )
-                updated += cur.rowcount
-            conn.commit()
-        return {"closingSnapshotsApplied": updated}
-
     # ------------------------------------------------------------------
     # Grading
     # ------------------------------------------------------------------
@@ -419,22 +399,15 @@ class PickLedger:
         outcome: str,
         actual_value: float | None,
     ) -> bool:
-        clv = None
         now = _utc_now()
         with self._connect() as conn:
-            existing = conn.execute(
-                "SELECT odds, closing_odds FROM picks WHERE pick_key = ?",
-                (pick_key,),
-            ).fetchone()
-            if existing is not None:
-                clv = _compute_clv(existing["odds"], existing["closing_odds"])
             cur = conn.execute(
                 """
                 UPDATE picks
-                SET outcome = ?, actual_value = ?, graded_at = ?, clv = COALESCE(?, clv)
+                SET outcome = ?, actual_value = ?, graded_at = ?
                 WHERE pick_key = ?
                 """,
-                (outcome, actual_value, now, clv, pick_key),
+                (outcome, actual_value, now, pick_key),
             )
             conn.commit()
         return cur.rowcount > 0
@@ -494,43 +467,6 @@ class PickLedger:
             params.append(min_estimated)
         with self._connect() as conn:
             return [dict(row) for row in conn.execute(query, params).fetchall()]
-
-    def clv_by_market(self) -> dict[str, Any]:
-        """Average closing-line value per market over every pick with a closing
-        snapshot -- settled or not.
-
-        CLV needs only the open and closing price, not the game result, so it
-        measures whether the model beats the market weeks before slow lottery
-        parlays settle. It is the most sample-efficient proof of edge we have:
-        consistently positive CLV is real edge; negative CLV means no strategy
-        downstream can rescue the picks. Surfaced as the Trainer headline.
-        """
-        with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT market_key, odds, closing_odds FROM picks "
-                "WHERE closing_odds IS NOT NULL"
-            ).fetchall()
-        by_market: dict[str, list[float]] = {}
-        all_clv: list[float] = []
-        for row in rows:
-            clv = _compute_clv(row["odds"], row["closing_odds"])
-            if clv is None:
-                continue
-            by_market.setdefault(str(row["market_key"] or "unknown"), []).append(clv)
-            all_clv.append(clv)
-
-        def _agg(vals: list[float]) -> dict[str, Any]:
-            n = len(vals)
-            return {
-                "samples": n,
-                "avgClv": round(sum(vals) / n, 4) if n else None,
-                "beatCloseRate": round(sum(1 for v in vals if v > 0) / n, 4) if n else None,
-            }
-
-        return {
-            "overall": _agg(all_clv),
-            "byMarket": {market: _agg(vals) for market, vals in by_market.items()},
-        }
 
     def players_missing_person_id(self) -> list[str]:
         """Distinct player names on picks that have no MLB id yet.
@@ -911,17 +847,12 @@ class PickLedger:
                 "SELECT COUNT(*) AS c FROM picks WHERE outcome = ?", (GRADE_WIN,)
             ).fetchone()["c"]
             slips = conn.execute("SELECT COUNT(*) AS c FROM slips").fetchone()["c"]
-            clv_row = conn.execute(
-                "SELECT AVG(clv) AS avg_clv, COUNT(clv) AS n FROM picks WHERE clv IS NOT NULL"
-            ).fetchone()
         return {
             "totalPicks": total,
             "gradedPicks": graded,
             "pendingPicks": pending,
             "gradedHitRate": round(wins / graded, 4) if graded else None,
             "slips": slips,
-            "averageClv": round(clv_row["avg_clv"], 4) if clv_row["avg_clv"] is not None else None,
-            "clvSampleSize": clv_row["n"],
         }
 
     # ------------------------------------------------------------------
@@ -962,9 +893,7 @@ class PickLedger:
                     recorded_at TEXT NOT NULL,
                     graded_at TEXT,
                     outcome TEXT NOT NULL DEFAULT 'pending',
-                    actual_value REAL,
-                    closing_odds REAL,
-                    clv REAL
+                    actual_value REAL
                 );
                 CREATE INDEX IF NOT EXISTS idx_picks_outcome ON picks(outcome);
                 CREATE INDEX IF NOT EXISTS idx_picks_market ON picks(market_key);
@@ -1116,17 +1045,6 @@ def _content_slip_id(slate_date: str | None, legs: list[dict[str, Any]]) -> str:
 
 def _market_key(row: dict[str, Any]) -> str | None:
     return row.get("normalizedMarketKey") or row.get("marketKey") or row.get("market")
-
-
-def _compute_clv(open_odds: Any, closing_odds: Any) -> float | None:
-    open_value = _float_or_none(open_odds)
-    close_value = _float_or_none(closing_odds)
-    if open_value is None or close_value is None or close_value <= 1.0 or open_value <= 1.0:
-        return None
-    # Positive CLV means the pick was taken at longer (better) decimal odds
-    # than the line closed at. Expressed as the fractional edge of the taken
-    # price over the closing price.
-    return round((open_value / close_value) - 1.0, 4)
 
 
 def _new_id(prefix: str) -> str:

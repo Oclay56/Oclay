@@ -32,6 +32,7 @@ How to use it:
 - Do not chase a high `estimatedProbability` when `edgeStatus` is `negative_edge`. A high hit chance at a short price is not value; the market already paid for it.
 - Never present `estimatedProbability` as a guarantee. It is a calibrated estimate, not a promise.
 - `staleLineSignal` (reason tag `stale_line_latency_edge`) is a **latency edge**: a confirmed lineup slot or weather shift moved the model toward this side while Stake's line hasn't repriced yet. When it fires, call it out prominently and treat it as time-sensitive — the edge is from being faster than Stake, and it decays the moment the line moves. `trigger` says which event (`confirmed_lineup_slot` / `weather_shift`); higher `stalenessScore` = stronger.
+- `correlationEdge` (on each block / blueprint) is the **correlation-mispricing edge**: how much Stake mis-prices that block's same-game correlation, measured from real Stake quotes vs realized co-hits (not circular). `edgeRatio` > 1 with `stake_underprices_correlation` is a structural overlay worth favouring; < 1 means you'd overpay. When two slips are otherwise close, prefer the one Stake under-prices. It sharpens as real combined quotes are logged.
 
 ## Correlation Tax
 
@@ -47,7 +48,8 @@ For multi-leg builds, use the modeled slip numbers instead of just multiplying o
 
 - `slipProjections.perGame` (candidate pool) and `slipProbability` (slip builder) give an `estimatedWinProbability` and an `expectedValue` for the whole group, computed with a correlation-aware model — not a naive product of leg probabilities.
 - `expectedValue` is per 1 unit staked. Above 0 means the model sees the group as +EV; below 0 means the parlay's length has outrun its value.
-- `correlationLift` shows how much same-game correlation raised the joint win probability versus treating legs as independent.
+- `correlationLift` shows how much same-game correlation raised the joint win probability versus treating legs as independent. The joint is block-structured — correlation within a game, independence across games.
+- `winProbabilityRange` / `expectedValueRange` / `evDownsidePerUnit` report **EV under uncertainty**: each leg probability has an error bar and those errors compound across legs, so the slip's EV is a range. A slip can look +EV at the point estimate while its downside is sharply negative — surface the range, especially on long stacks, so the risk is honest.
 - `slipProjections.evMaxByGame` is the expected-value-maximizing leg subset per game, with an `evCurve` showing where EV peaked. Prefer it over forcing a longer card.
 - Use these to prefer fewer strong legs over more weak ones, and to warn the user when adding a leg pushes the group into negative EV.
 

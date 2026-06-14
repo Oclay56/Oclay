@@ -77,8 +77,6 @@ def _calibrate() -> dict[str, Any]:
         "marketsCorrected": len(report["corrections"]),
         "killedMarkets": report.get("killedMarkets") or [],
         "correlationCategoriesMeasured": correlations["categoriesMeasured"],
-        "clvOverall": report.get("clvOverall"),
-        "clvByMarket": report.get("clvByMarket"),
         "correlationMispricing": {
             "globalScalar": quote_model.get("scalar"),
             "samples": quote_model.get("samples"),

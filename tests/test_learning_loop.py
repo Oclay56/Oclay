@@ -90,25 +90,6 @@ def test_full_learning_loop(tmp_path):
     assert calibration["overall"]["brier"] is not None
 
 
-def test_closing_line_value_recorded(tmp_path):
-    ledger = PickLedger(db_path=tmp_path / "ledger.sqlite")
-    pool = {
-        "mode": "best_available",
-        "date": SLATE,
-        "rankedCandidates": [_candidate("row-1", 101, "hits", "over", 0.5, 2.0, 0.6)],
-    }
-    ledger.record_candidate_pool(pool, slate_date=SLATE)
-
-    # Line shortened to 1.7 by first pitch: we took 2.0, so positive CLV.
-    ledger.record_closing_snapshot([{"rowId": "row-1", "odds": 1.7}])
-    engine = FakeGradingEngine({101: {"hits": 1}})
-    asyncio.run(grade_pending_picks(engine, ledger=ledger, slate_date=SLATE))
-
-    summary = ledger.summary()
-    assert summary["clvSampleSize"] == 1
-    assert summary["averageClv"] > 0  # 2.0 / 1.7 - 1 > 0
-
-
 def test_pushes_do_not_break_slip_settlement(tmp_path):
     ledger = PickLedger(db_path=tmp_path / "ledger.sqlite")
     slip = {

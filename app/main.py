@@ -1642,13 +1642,12 @@ async def mlb_validate_selections(
 async def oclay_learning_summary(
     ledger: PickLedger = Depends(get_pick_ledger),
 ) -> dict[str, Any]:
-    """Headline accountability metrics: graded hit rate, CLV, pick volume."""
+    """Headline accountability metrics: graded hit rate and pick volume."""
     return {
         "purpose": "oclay_learning_summary",
         "ledger": ledger.summary(),
         "notes": [
             "gradedHitRate is the realized win rate over settled picks.",
-            "averageClv > 0 means picks were taken at better-than-closing prices.",
         ],
     }
 
@@ -1697,11 +1696,12 @@ async def oclay_timing_plan(
     payload: dict[str, Any] = Body(default_factory=dict),
     engine: MLBDataEngine = Depends(get_mlb_engine),
 ) -> dict[str, Any]:
-    """Which games are due for a closing snapshot or a lineup-window rescan.
+    """Which games are in the lineup-confirmation rescan window.
 
     Pass an explicit ``games`` list (each with fixtureSlug + start time) or a
     ``date`` to derive the slate from the MLB schedule. A scheduler polls this
-    every few minutes and acts on the returned windows.
+    every few minutes and rescans the boards in the lineup window so the
+    stale-line / latency detector can catch prices that have not yet adjusted.
     """
     games = payload.get("games")
     if not isinstance(games, list) or not games:
@@ -1777,19 +1777,6 @@ async def oclay_learning_record_slip(
         ),
         **result,
     }
-
-
-@app.post("/oclay/learning/closing-snapshot")
-async def oclay_learning_closing_snapshot(
-    payload: dict[str, Any] = Body(default_factory=dict),
-    ledger: PickLedger = Depends(get_pick_ledger),
-) -> dict[str, Any]:
-    """Record near-first-pitch odds for pending picks to compute CLV later."""
-    snapshots = payload.get("snapshots") or payload.get("rows") or []
-    if not isinstance(snapshots, list):
-        raise HTTPException(status_code=422, detail="snapshots must be a list of {rowId, odds}.")
-    result = ledger.record_closing_snapshot(snapshots)
-    return {"purpose": "oclay_closing_snapshot", **result}
 
 
 # Temporary compatibility aliases for the current Custom GPT action schema.
