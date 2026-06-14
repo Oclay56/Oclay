@@ -26,6 +26,7 @@ rational approximation); no numpy/scipy dependency.
 from __future__ import annotations
 
 import math
+from collections import defaultdict
 from typing import Any
 
 from .mlb_props import slug_key
@@ -207,7 +208,14 @@ def slip_probability_and_ev(legs: list[dict[str, Any]]) -> dict[str, Any]:
 
     correlation = slip_correlation_summary(legs)
     effective_rho = max(0.0, min(_MAX_EFFECTIVE_RHO, correlation["meanPairwiseCorrelation"]))
-    joint = _single_factor_joint_probability(probs, effective_rho) if probs else 0.0
+    # Correlation is real WITHIN a game but ~0 ACROSS games. Running one copula
+    # over every leg at the same-game rho over-couples a multi-game stack -- it
+    # overstates joint win probability and over-taxes the predicted quote (the
+    # ratio slams into its floor, so a 6-game slip is predicted at ~1/4 its true
+    # Stake price). Instead price each game's block on its own and multiply the
+    # blocks as independent. For a single-game slip this is identical to before.
+    block_count = len({_fixture(leg) for leg in priced}) if priced else 0
+    joint = _block_structured_joint(priced) if probs else 0.0
 
     expected_value = joint * (product_odds - 1.0) - (1.0 - joint) if probs else None
     independence_ev = (
@@ -226,9 +234,11 @@ def slip_probability_and_ev(legs: list[dict[str, Any]]) -> dict[str, Any]:
         else None,
         "expectedValuePerUnit": round(expected_value, 4) if expected_value is not None else None,
         "effectiveCorrelation": round(effective_rho, 4),
+        "blockCount": block_count,
         "correlation": correlation,
         "fullyPriced": len(priced) == len(legs) and bool(legs),
-        "method": "single_factor_gaussian_copula",
+        "method": "single_factor_gaussian_copula_per_game_blocks",
+        "correlationStructure": "per_game_blocks_independent_across_games",
     }
 
 
@@ -259,6 +269,39 @@ def leg_correlation_penalty(
         "driverPlayer": _player(driver) if driver else None,
         "driverMarket": _market(driver) if driver else None,
     }
+
+
+# ----------------------------------------------------------------------
+# Block-structured joint probability (correlation within a game, independence
+# across games) -- the correct structure for a multi-game SGM stack.
+# ----------------------------------------------------------------------
+def _block_mean_rho(group: list[dict[str, Any]]) -> float:
+    """Mean positive pairwise correlation among one game's legs."""
+    rhos: list[float] = []
+    for i in range(len(group)):
+        for j in range(i + 1, len(group)):
+            rho = leg_pair_correlation(group[i], group[j])
+            if abs(rho) > 1e-9:
+                rhos.append(rho)
+    if not rhos:
+        return 0.0
+    return max(0.0, min(_MAX_EFFECTIVE_RHO, sum(rhos) / len(rhos)))
+
+
+def _block_structured_joint(priced: list[dict[str, Any]]) -> float:
+    """P(all win) with each game's legs coupled by the copula and the games
+    multiplied as independent blocks. Single-game slips reduce to one copula
+    over all legs -- identical to the prior behavior."""
+    by_fixture: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for leg in priced:
+        by_fixture[_fixture(leg)].append(leg)
+    joint = 1.0
+    for group in by_fixture.values():
+        gprobs = [p for leg in group if (p := _win_probability(leg)) is not None]
+        if not gprobs:
+            continue
+        joint *= _single_factor_joint_probability(gprobs, _block_mean_rho(group))
+    return max(0.0, min(1.0, joint))
 
 
 # ----------------------------------------------------------------------
