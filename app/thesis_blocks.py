@@ -68,6 +68,17 @@ _PITCHER = {"strikeouts", "pitcher_strikeouts", "hits_allowed", "earned_runs", "
 _BEAM_WIDTH = 256
 _EVMAX_ODDS_CEILING = 250_000.0
 
+# --- Dominance / Pareto-frontier ladder ---------------------------------------
+# Out of the billions of possible slips, the only ones that "make sense" are the
+# non-dominated set: each is the best win probability achievable at its payout.
+# Everything else is strictly worse than something on the frontier. We surface a
+# short labeled ladder from "anchor" (safest that still clears the floor) up to
+# "moonshot" (max payout, best construction) -- the moonshot rung is always kept,
+# so the longshot style is preserved, just built optimally.
+FRONTIER_RUNGS = 5
+FRONTIER_DEFAULT_MIN_ODDS = 100.0
+_FRONTIER_MAX_CANDIDATES = 4000  # bound the O(n^2) frontier scan
+
 
 # ----------------------------------------------------------------------
 # Leg-level helpers
@@ -303,6 +314,46 @@ def _standalone_ev(leg: dict[str, Any]) -> float:
     return win * (odds - 1.0) - (1.0 - win)
 
 
+def block_variants(block: dict[str, Any], *, min_legs: int = BLOCK_MIN_LEGS) -> list[dict[str, Any]]:
+    """A game's safe->aggressive menu, free from the block we already built.
+
+    ``build_block`` grows legs highest-merit first, so each *prefix* of its
+    ordered legs is a valid, cheaper same-game block: fewer legs -> lower odds,
+    higher win probability. Emitting the prefixes gives the cross-game assembler
+    real per-game choices (lighter for safety, fuller for payout) instead of a
+    single fixed multiplier -- which is what lets the frontier span a real
+    ladder. The full block is the top variant.
+    """
+    legs = block.get("legs") or []
+    if len(legs) < min_legs:
+        return [block]
+    ev_curve = block.get("evCurve") or []
+    variants: list[dict[str, Any]] = []
+    for k in range(min_legs, len(legs) + 1):
+        prefix = legs[:k]
+        projection = slip_projection(prefix)
+        type_counts: Counter[str] = Counter(_market_key(leg) for leg in prefix)
+        variant = _finalize_block(prefix, projection, type_counts, ev_curve[:k])
+        variant["variantLegCount"] = k
+        variant["variantOf"] = block.get("fixtureSlug")
+        variants.append(variant)
+    return variants
+
+
+def build_variant_blocks(ranked_candidates: list[dict[str, Any]], **kwargs: Any) -> list[dict[str, Any]]:
+    """Every game's full safe->aggressive block menu, for the frontier search."""
+    by_game: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in ranked_candidates:
+        by_game[str(row.get("fixtureSlug") or "unknown")].append(row)
+    out: list[dict[str, Any]] = []
+    min_legs = int(kwargs.get("min_legs", BLOCK_MIN_LEGS))
+    for legs in by_game.values():
+        block = build_block(legs, **kwargs)
+        if block is not None:
+            out.extend(block_variants(block, min_legs=min_legs))
+    return out
+
+
 # ----------------------------------------------------------------------
 # Stage 5: thesis labeling (descriptive only)
 # ----------------------------------------------------------------------
@@ -464,31 +515,33 @@ def _blueprint_metrics(blocks: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def assemble_to_target(
+def _beam_search_combos(
     blocks: list[dict[str, Any]],
     *,
     target_min: float,
     target_max: float,
-    max_blocks: int = 8,
-    beam_width: int = _BEAM_WIDTH,
-    top_n: int = 3,
-) -> list[dict[str, Any]]:
-    """Find block combinations whose odds land in [target_min, target_max].
+    max_blocks: int,
+    beam_width: int,
+    signature: Any,
+) -> list[list[dict[str, Any]]]:
+    """Beam search for block combos whose odds land in [target_min, target_max].
 
-    One block per game. Beam search over combinations, pruning any partial whose
-    odds already exceed ``target_max`` (odds only grow as blocks are added).
-    Returns up to ``top_n`` blueprints ranked by risk-adjusted value -- the
-    board, not a fixed power formula, decides the block count and multipliers.
+    One block per game (a slip never uses two blocks from the same fixture, so
+    block *variants* of one game compete for that game's single slot). Prunes any
+    partial whose odds already exceed ``target_max`` -- odds only grow as blocks
+    are added. ``signature`` dedups completed combos; pass a fixture-only key for
+    one-block-per-game, or a (fixture, legCount) key to keep variants distinct.
     """
     usable = [b for b in blocks if b.get("payoutOdds") and b.get("winProbability") is not None]
     usable.sort(key=lambda b: b.get("payoutOdds") or 0.0, reverse=True)
     if not usable or target_min <= 0:
         return []
 
-    # State: (fixtures_used, blocks, log_odds). Seed with the empty set.
     states: list[tuple[frozenset[str], tuple[int, ...], float]] = [(frozenset(), (), 0.0)]
     log_max = math.log(target_max)
+    log_min = math.log(target_min)
     completed: list[list[dict[str, Any]]] = []
+    seen: set[Any] = set()
 
     for idx, block in enumerate(usable):
         fixture = str(block.get("fixtureSlug"))
@@ -502,22 +555,48 @@ def assemble_to_target(
                 continue
             new_states.append((fixtures | {fixture}, chosen + (idx,), combined))
         states.extend(new_states)
-        # Record completed combinations that now sit inside the band.
         for fixtures, chosen, log_odds in new_states:
-            if log_odds >= math.log(target_min) - 1e-9:
-                completed.append([usable[i] for i in chosen])
+            if log_odds >= log_min - 1e-9:
+                combo = [usable[i] for i in chosen]
+                sig = signature(combo)
+                if sig in seen:
+                    continue
+                seen.add(sig)
+                completed.append(combo)
+                if len(completed) >= _FRONTIER_MAX_CANDIDATES:
+                    return completed
         # Beam: keep the most promising partial states (closest to the band,
         # then highest joint probability) to bound the search.
         states.sort(key=lambda s: (s[2], len(s[1])), reverse=True)
         states = states[:beam_width]
 
+    return completed
+
+
+def assemble_to_target(
+    blocks: list[dict[str, Any]],
+    *,
+    target_min: float,
+    target_max: float,
+    max_blocks: int = 8,
+    beam_width: int = _BEAM_WIDTH,
+    top_n: int = 3,
+) -> list[dict[str, Any]]:
+    """Find block combinations whose odds land in [target_min, target_max].
+
+    Returns up to ``top_n`` blueprints ranked by risk-adjusted value -- the
+    board, not a fixed power formula, decides the block count and multipliers.
+    """
+    combos = _beam_search_combos(
+        blocks,
+        target_min=target_min,
+        target_max=target_max,
+        max_blocks=max_blocks,
+        beam_width=beam_width,
+        signature=lambda combo: tuple(sorted(str(b.get("fixtureSlug")) for b in combo)),
+    )
     scored: list[dict[str, Any]] = []
-    seen: set[tuple[int, ...]] = set()
-    for combo in completed:
-        signature = tuple(sorted(str(b.get("fixtureSlug")) for b in combo))
-        if signature in seen:
-            continue
-        seen.add(signature)
+    for combo in combos:
         metrics = _blueprint_metrics(combo)
         if metrics.get("valid"):
             scored.append(_make_blueprint(combo, metrics, target_min, target_max))
@@ -622,6 +701,114 @@ def assemble_ev_max(blocks: list[dict[str, Any]], *, max_blocks: int = 8) -> dic
 
 
 # ----------------------------------------------------------------------
+# Stage 4b: dominance pruning -> the Pareto-frontier "combinations that make sense"
+# ----------------------------------------------------------------------
+def pareto_frontier(blueprints: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep only non-dominated slips on (win probability up, payout up).
+
+    A slip is dominated if another slip is at least as good in BOTH win
+    probability and payout, and strictly better in one. Out of thousands of
+    combinations the survivors -- each the best win probability achievable at its
+    payout -- are usually a handful. This is the formal answer to "which
+    combinations make sense": all the others are strictly worse than one of these.
+    """
+    # Collapse exact (prob, odds) ties to the best-constructed one first.
+    best_at_point: dict[tuple[float, float], dict[str, Any]] = {}
+    for bp in blueprints:
+        key = (round(bp.get("jointWinProbability") or 0.0, 6), round(bp.get("productOdds") or 0.0, 2))
+        cur = best_at_point.get(key)
+        if cur is None or (bp.get("riskAdjustedValue") or 0.0) > (cur.get("riskAdjustedValue") or 0.0):
+            best_at_point[key] = bp
+    pool = list(best_at_point.values())
+
+    kept: list[dict[str, Any]] = []
+    for bp in pool:
+        p = bp.get("jointWinProbability") or 0.0
+        o = bp.get("productOdds") or 0.0
+        dominated = False
+        for other in pool:
+            if other is bp:
+                continue
+            q = other.get("jointWinProbability") or 0.0
+            r = other.get("productOdds") or 0.0
+            if q >= p and r >= o and (q > p or r > o):
+                dominated = True
+                break
+        if not dominated:
+            kept.append(bp)
+    kept.sort(key=lambda bp: bp.get("productOdds") or 0.0)
+    return kept
+
+
+def _select_ladder(frontier: list[dict[str, Any]], rungs: int) -> list[dict[str, Any]]:
+    """Evenly-spaced rungs across the payout axis, always keeping the safest
+    (lowest odds) and the moonshot (highest odds) ends."""
+    n = len(frontier)
+    if n <= rungs or rungs < 2:
+        return frontier
+    idxs = sorted({round(i * (n - 1) / (rungs - 1)) for i in range(rungs)})
+    return [frontier[i] for i in idxs]
+
+
+def _label_tiers(ladder: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Tag the ladder safest -> moonshot so it reads as a risk/reward ramp."""
+    n = len(ladder)
+    out: list[dict[str, Any]] = []
+    for i, bp in enumerate(ladder):
+        if n == 1:
+            tier = "moonshot"
+        elif i == 0:
+            tier = "anchor"  # safest construction that still clears the floor
+        elif i == n - 1:
+            tier = "moonshot"  # max payout, best construction -- always retained
+        elif i < (n - 1) / 2:
+            tier = "balanced"
+        else:
+            tier = "aggressive"
+        bp = dict(bp)
+        bp["tier"] = tier
+        bp["tierRank"] = i + 1
+        out.append(bp)
+    return out
+
+
+def assemble_frontier(
+    blocks: list[dict[str, Any]],
+    *,
+    min_odds: float,
+    max_odds: float,
+    max_blocks: int = 8,
+    beam_width: int = _BEAM_WIDTH,
+    rungs: int = FRONTIER_RUNGS,
+) -> list[dict[str, Any]]:
+    """The ladder of slips that make sense, from anchor to moonshot.
+
+    Beam-searches the whole [min_odds, max_odds] range over per-game block
+    variants, dominance-prunes to the Pareto frontier, then returns a short
+    labeled ladder spanning the payout axis. The moonshot (highest-odds) rung is
+    always on the frontier (nothing pays more), so the longshot style is kept --
+    just built at the best win probability available for that payout.
+    """
+    combos = _beam_search_combos(
+        blocks,
+        target_min=min_odds,
+        target_max=max_odds,
+        max_blocks=max_blocks,
+        beam_width=beam_width,
+        signature=lambda combo: tuple(
+            sorted((str(b.get("fixtureSlug")), int(b.get("legCount") or 0)) for b in combo)
+        ),
+    )
+    blueprints: list[dict[str, Any]] = []
+    for combo in combos:
+        metrics = _blueprint_metrics(combo)
+        if metrics.get("valid"):
+            blueprints.append(_make_blueprint(combo, metrics, min_odds, max_odds))
+    frontier = pareto_frontier(blueprints)
+    return _label_tiers(_select_ladder(frontier, rungs))
+
+
+# ----------------------------------------------------------------------
 # Public entrypoint: full board -> blocks + blueprints
 # ----------------------------------------------------------------------
 def build_slip_blueprints(
@@ -659,6 +846,18 @@ def build_slip_blueprints(
 
     ev_max = assemble_ev_max(ranked, max_blocks=max_blocks)
 
+    # Dominance ladder: per-game variants -> Pareto frontier -> labeled rungs.
+    # If a band is set, the ladder spans within it (safest-in-band -> moonshot);
+    # otherwise it spans the whole board from a sane floor to the EV-max ceiling.
+    variant_blocks = rank_blocks(build_variant_blocks(ranked_candidates, **(block_kwargs or {})))
+    if target_odds_min and target_odds_max and target_odds_max >= target_odds_min:
+        frontier_min, frontier_max = float(target_odds_min), float(target_odds_max)
+    else:
+        frontier_min, frontier_max = FRONTIER_DEFAULT_MIN_ODDS, _EVMAX_ODDS_CEILING
+    frontier = assemble_frontier(
+        variant_blocks, min_odds=frontier_min, max_odds=frontier_max, max_blocks=max_blocks
+    )
+
     return {
         "engine": "thesis_block_slip_engine",
         "decisionOwner": "custom_gpt",
@@ -677,6 +876,14 @@ def build_slip_blueprints(
         "bandBlueprints": band_blueprints,
         "bandNote": band_note,
         "evMaxBlueprint": ev_max,
+        "frontier": frontier,
+        "frontierBand": {"min": frontier_min, "max": frontier_max},
+        "frontierNote": (
+            "Dominance ladder: each rung is the best win probability achievable at its "
+            "payout; every other combination is strictly worse than one of these. Rungs "
+            "run anchor (safest that clears the floor) -> moonshot (max payout). The "
+            "moonshot rung is always retained."
+        ),
         "balanceControls": {
             "marketTypeHardCap": MARKET_TYPE_HARD_CAP,
             "sequencePerBlockCap": SEQUENCE_PER_BLOCK_CAP,

@@ -47,6 +47,7 @@ Every block lives inside these fences.
 | 2. Form blocks | `thesis_blocks.build_block` | new — uses `correlation` copula + caps + fixes #1/#2 |
 | 3. Rank blocks | `thesis_blocks.rank_blocks` | new — reuses the realized kill-switch |
 | 4. Decomposition search | `thesis_blocks.assemble_to_target` | new core — reuses copula + `exposure` + fixes #3/#4 |
+| 4b. Dominance ladder | `thesis_blocks.assemble_frontier` | new — per-game variants → Pareto frontier |
 | 5. Thesis labeling | `thesis_blocks.label_block` | new — descriptive only |
 | 6. Log with structure tags | `pick_ledger.record_slip` | extended |
 
@@ -54,6 +55,32 @@ The math (per-leg calibrated probability, single-factor Gaussian copula, the
 predicted Stake quote) is reused from `app/correlation.py` and
 `app/quote_model.py`. The engine assembles existing parts plus one new core
 (the decomposition search) — it is not a parallel re-implementation.
+
+### 4b. Dominance ladder (the "combinations that make sense")
+
+With ~2 players over ~15 games the number of possible slips is ~2³⁰ ≈ a billion;
+they cannot be enumerated. The only ones that *make sense* are the **non-dominated**
+set: a slip is dominated when another slip is at least as good in **both** win
+probability and payout (and strictly better in one). Everything dominated is, by
+definition, strictly worse than something kept — so it never makes sense to pick.
+
+The funnel:
+
+1. **Edge-gate legs** upstream (negative-edge legs never enter a block).
+2. **Per-game variants** — `block_variants` emits every prefix of a game's
+   merit-ordered block. Fewer legs → lower odds, higher win probability, so each
+   game offers a safe→aggressive menu for free. The assembler's one-block-per-game
+   rule means the variants of a game compete for that game's single slip slot.
+3. **Beam search** over the whole odds range (`_beam_search_combos`, shared with
+   `assemble_to_target`), then **`pareto_frontier`** drops every dominated slip.
+4. **Ladder** — `assemble_frontier` returns a short, evenly-spaced set of rungs
+   tagged `tier`: `anchor` (safest that clears the floor) → `balanced` →
+   `aggressive` → `moonshot` (max payout, best construction).
+
+The **moonshot rung is always on the frontier** (nothing pays more, so nothing
+dominates it) and is always retained — the longshot style is preserved, just
+built at the best win probability available for that payout. Surfaced on
+`slipBlueprints.frontier` with `frontierBand` and `frontierNote`.
 
 ## 5. The four balance fixes
 
