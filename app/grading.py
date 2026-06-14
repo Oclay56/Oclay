@@ -40,6 +40,16 @@ _WAITING_REASONS = {REASON_NO_GAME, REASON_NO_STAT, REASON_FETCH}
 # wait -- so it gets promoted to "needs attention" instead of waiting forever.
 STALE_AFTER_DAYS = 2
 
+# A pending leg whose player has NO game on the slate date is auto-voided once
+# the absence is conclusive: either the player's own log already contains a
+# strictly-later game (timezone-independent proof they did not play that day),
+# or the slate date is this many days in the past (the box score posted long
+# ago and there is simply no line). Voiding drops the leg out of its slip and
+# keeps it out of calibration -- the right outcome for a DNP / scratch / off
+# day, and it stops these legs from clogging the pending list forever.
+NO_GAME_VOID_MIN_AGE_DAYS = STALE_AFTER_DAYS
+REASON_NO_GAME_VOID = "no_game_confirmed_void"
+
 _REASON_TEXT = {
     REASON_NO_GAME: "box score not posted yet",
     REASON_NO_STAT: "stat not in the box score yet",
@@ -48,6 +58,7 @@ _REASON_TEXT = {
     REASON_NO_PLAYER: "player not matched to an MLB id",
     REASON_UNMAPPED: "market not recognized",
     REASON_SEQUENCE: "first-event market (first hit/run/HR) -- not auto-gradable yet",
+    REASON_NO_GAME_VOID: "no game for this player on the slate date (DNP/scratch) -- voided",
 }
 
 
@@ -111,7 +122,7 @@ async def grade_pending_picks(
     ledger = ledger or PickLedger()
     pending = ledger.pending_picks(slate_date=slate_date)
     slip_keys = ledger.slip_leg_pick_keys()
-    gradable, waiting_on, needs_attention = await _classify_pending(
+    gradable, voided, waiting_on, needs_attention = await _classify_pending(
         engine, pending, history_limit=history_limit, persist_ledger=ledger,
         today=today, slip_keys=slip_keys,
     )
@@ -123,11 +134,21 @@ async def grade_pending_picks(
             graded += 1
             outcomes[outcome] = outcomes.get(outcome, 0) + 1
 
+    # Auto-void legs whose player conclusively had no game on the slate date
+    # (DNP / scratch / off day). Void drops them from their slip and keeps them
+    # out of calibration, so they stop clogging the pending list forever.
+    auto_voided = 0
+    for pick, _reason in voided:
+        if ledger.apply_grade(pick["pick_key"], outcome=GRADE_VOID, actual_value=None):
+            auto_voided += 1
+            outcomes[GRADE_VOID] = outcomes.get(GRADE_VOID, 0) + 1
+
     await _attach_game_status(engine, waiting_on)
     slip_settlement = ledger.settle_slips()
     return {
         "pendingConsidered": len(pending),
         "graded": graded,
+        "autoVoidedNoGame": auto_voided,
         "skippedUnresolved": len(waiting_on) + len(needs_attention),
         "outcomes": outcomes,
         "slips": slip_settlement,
@@ -166,7 +187,7 @@ async def diagnose_pending_picks(
     ledger = ledger or PickLedger()
     pending = ledger.pending_picks(slate_date=slate_date)
     slip_keys = ledger.slip_leg_pick_keys()
-    gradable, waiting_on, needs_attention = await _classify_pending(
+    gradable, voided, waiting_on, needs_attention = await _classify_pending(
         engine, pending, history_limit=history_limit, persist_ledger=None,
         today=today, slip_keys=slip_keys,
     )
@@ -174,6 +195,10 @@ async def diagnose_pending_picks(
     return {
         "pendingConsidered": len(pending),
         "gradableNow": len(gradable),
+        "autoVoidableNoGame": [
+            _pending_detail(pick, REASON_NO_GAME_VOID, today=today, slip_keys=slip_keys)
+            for pick, _reason in voided
+        ],
         "waitingOn": waiting_on,
         "needsAttention": needs_attention,
         "pendingSources": _pending_source_counts(waiting_on, needs_attention),
@@ -192,6 +217,7 @@ async def _classify_pending(
     """Run each pending pick through the grader, sorting into gradable now /
     waiting on stats / needs attention. Applies no grades (caller decides)."""
     gradable: list[tuple[dict[str, Any], str, float | None]] = []
+    voided: list[tuple[dict[str, Any], str]] = []
     waiting_on: list[dict[str, Any]] = []
     needs_attention: list[dict[str, Any]] = []
     game_log_cache: dict[tuple[int, str, int | None], dict[str, Any]] = {}
@@ -205,17 +231,21 @@ async def _classify_pending(
             game_log_cache=game_log_cache,
             person_cache=person_cache,
             ledger=persist_ledger,
+            today=today,
         )
         if status == "graded":
             outcome, actual_value = payload
             gradable.append((pick, outcome, actual_value))
+            continue
+        if status == "void":
+            voided.append((pick, payload))
             continue
         detail = _pending_detail(pick, payload, today=today, slip_keys=slip_keys)
         if detail["category"] == "waiting":
             waiting_on.append(detail)
         else:
             needs_attention.append(detail)
-    return gradable, waiting_on, needs_attention
+    return gradable, voided, waiting_on, needs_attention
 
 
 def _inning_label(inning: dict[str, Any] | None) -> str:
@@ -293,8 +323,9 @@ async def _grade_one(
     game_log_cache: dict[tuple[int, str, int | None], dict[str, Any]],
     person_cache: dict[str, int | None] | None = None,
     ledger: PickLedger | None = None,
+    today: date | None = None,
 ) -> tuple[str, Any]:
-    """Returns ("graded", (outcome, value)) or ("skip", reason_code)."""
+    """Returns ("graded", (outcome, value)), ("void", reason), or ("skip", reason)."""
     line = _float_or_none(pick.get("line"))
     side = str(pick.get("side") or "").lower()
     slate_date = str(pick.get("slate_date") or "")
@@ -344,6 +375,11 @@ async def _grade_one(
 
     game = _game_on_date(history, slate_date)
     if game is None:
+        # No line on the slate date. If the absence is conclusive (a later game
+        # exists in the log, or the date is well past), the leg never settles --
+        # void it so it leaves the pending list and stays out of calibration.
+        if _confirmed_no_game(history, slate_date, today):
+            return ("void", REASON_NO_GAME_VOID)
         return ("skip", REASON_NO_GAME)
 
     stat_ref: Any = mapping if mapping.get("statFormula") else mapping.get("statKey")
@@ -390,6 +426,38 @@ def _game_on_date(history: dict[str, Any], slate_date: str) -> dict[str, Any] | 
         if str(game.get("date") or "")[:10] == target:
             return game
     return None
+
+
+def _has_later_game(history: dict[str, Any], slate_date: str) -> bool:
+    """True if the player's log holds a game strictly after the slate date.
+
+    A later row proves the log is current past that date, so the absence of a
+    slate-date row is conclusive: the player did not play that day. ISO date
+    strings compare correctly lexicographically.
+    """
+    target = slate_date[:10]
+    for game in (history or {}).get("games") or []:
+        if str(game.get("date") or "")[:10] > target:
+            return True
+    return False
+
+
+def _confirmed_no_game(
+    history: dict[str, Any], slate_date: str, today: date | None
+) -> bool:
+    """A pending leg with no slate-date row that will never settle as-is.
+
+    Conclusive when the player's own log already contains a later game, or when
+    the slate date is far enough in the past that the box score has posted and
+    there is still no line. Today's not-yet-posted games stay 'waiting'.
+    """
+    if _has_later_game(history, slate_date):
+        return True
+    if today is not None:
+        age = _days_since(slate_date, today)
+        if age is not None and age >= NO_GAME_VOID_MIN_AGE_DAYS:
+            return True
+    return False
 
 
 def _season_from_date(slate_date: str) -> int | None:

@@ -207,6 +207,12 @@ def print_trainer_report(report: dict[str, Any], *, console: Console | None = No
         f"Graded: [bold]{graded}[/]   "
         f"Not final yet: {_num(grade.get('skippedUnresolved'))}"
     )
+    auto_voided = grade.get("autoVoidedNoGame", 0) or 0
+    if auto_voided:
+        console.print(
+            f"  [dim]Auto-voided {auto_voided} leg(s): player had no game on the "
+            f"slate date (DNP/scratch) - cleared from pending, excluded from calibration.[/]"
+        )
     if graded:
         console.print(
             f"  Outcomes - [green]wins {outcomes.get('win', 0)}[/], "

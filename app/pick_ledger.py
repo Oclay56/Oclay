@@ -837,6 +837,11 @@ class PickLedger:
                 "SELECT COUNT(*) AS c FROM picks WHERE outcome IN (?, ?)",
                 (GRADE_WIN, GRADE_LOSS),
             ).fetchone()["c"]
+            # Count pending directly: void/push picks are resolved, not pending,
+            # so "total - graded" would wrongly inflate the pending count.
+            pending = conn.execute(
+                "SELECT COUNT(*) AS c FROM picks WHERE outcome = ?", (PENDING,)
+            ).fetchone()["c"]
             wins = conn.execute(
                 "SELECT COUNT(*) AS c FROM picks WHERE outcome = ?", (GRADE_WIN,)
             ).fetchone()["c"]
@@ -847,7 +852,7 @@ class PickLedger:
         return {
             "totalPicks": total,
             "gradedPicks": graded,
-            "pendingPicks": total - graded,
+            "pendingPicks": pending,
             "gradedHitRate": round(wins / graded, 4) if graded else None,
             "slips": slips,
             "averageClv": round(clv_row["avg_clv"], 4) if clv_row["avg_clv"] is not None else None,

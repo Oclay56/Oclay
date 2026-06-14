@@ -32,6 +32,13 @@ class NoGameYetEngine(FakeEngine):
         return {"games": [{"date": "2025-05-01", "stats": {"hits": 1}}]}
 
 
+class GameButNoStatEngine(FakeEngine):
+    async def get_player_recent_history(self, player_id, group="hitting", season=None, limit=25):
+        # The game IS on the slate date, but the stat is missing from the box
+        # score -- a data issue, not a no-show. This must NOT be auto-voided.
+        return {"games": [{"date": SLATE, "stats": {}}]}
+
+
 class ScheduleEngine(NoGameYetEngine):
     def __init__(self, *, name_to_id, status, inning=None):
         super().__init__(name_to_id=name_to_id)
@@ -186,7 +193,9 @@ def test_unmapped_market_is_flagged_for_attention(tmp_path):
 def test_stale_waiting_pick_is_promoted_to_attention(tmp_path):
     ledger = PickLedger(db_path=tmp_path / "l.sqlite")
     _pending_pick(ledger, row_id="row-7", player="Old Game", with_id=True)
-    engine = NoGameYetEngine(name_to_id={})  # would be "waiting", but it's days old
+    # Game happened but the stat never posted -- a real data issue, not a no-show,
+    # so it stays for human attention rather than being auto-voided.
+    engine = GameButNoStatEngine(name_to_id={})
 
     # today is well after the slate -> a real wait would have settled by now.
     report = asyncio.run(
@@ -194,6 +203,7 @@ def test_stale_waiting_pick_is_promoted_to_attention(tmp_path):
     )
 
     assert report["waitingOn"] == []
+    assert report["autoVoidedNoGame"] == 0
     attention = report["needsAttention"]
     assert len(attention) == 1
     assert attention[0]["player"] == "Old Game"
