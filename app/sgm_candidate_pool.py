@@ -92,6 +92,7 @@ def _compact_slip_blueprints(blueprints: dict[str, Any]) -> dict[str, Any]:
             "marketMix": block.get("marketMix"),
             "tilt": block.get("tilt"),
             "thesisPolicy": block.get("thesisPolicy"),
+            "correlationEdge": block.get("correlationEdge"),
         }
         for block in blueprints.get("blocks") or []
         if isinstance(block, dict)

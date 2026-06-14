@@ -245,6 +245,46 @@ def _print_clv_headline(console: Console, cal: dict[str, Any]) -> None:
         )
 
 
+def _print_correlation_mispricing(console: Console, cal: dict[str, Any]) -> None:
+    """Where Stake mis-prices correlation -- the structural-overlay hunt.
+
+    The per-category repricing scalar is Stake's real quote vs the realized-co-hit
+    copula: > 1 means Stake credits less correlation than actually occurs, so the
+    structure is under-priced (an overlay you can target); < 1 means it over-credits.
+    """
+    mis = cal.get("correlationMispricing") or {}
+    by_cat = mis.get("byCategory") or {}
+    if not by_cat:
+        console.print(
+            "  [bold]Correlation mispricing:[/] [dim]no real Stake quotes bucketed yet[/] - "
+            "log real combined quotes so the engine can learn which structures Stake under-prices."
+        )
+        return
+    ranked = sorted(
+        by_cat.items(),
+        key=lambda kv: kv[1].get("scalar") if kv[1].get("scalar") is not None else 1.0,
+        reverse=True,
+    )
+    console.print(
+        f"  [bold]Correlation mispricing (overlay hunt):[/] "
+        f"global repricing scalar {_num(mis.get('globalScalar'))} over {_num(mis.get('samples'))} real quotes"
+    )
+    for category, info in ranked[:4]:
+        scalar = info.get("scalar")
+        n = info.get("samples") or 0
+        if scalar is None:
+            continue
+        if scalar >= 1.05:
+            tag, color = "Stake UNDER-prices -> overlay", "bold green"
+        elif scalar <= 0.95:
+            tag, color = "Stake over-credits -> avoid", "red"
+        else:
+            tag, color = "fairly priced", "yellow"
+        console.print(
+            f"    [{color}]{category}[/]: scalar {scalar:.3f} (n={n}) - {tag}"
+        )
+
+
 def print_trainer_report(report: dict[str, Any], *, console: Console | None = None) -> None:
     console = console or Console()
     console.rule("[bold magenta]TRAINER  -  Grade + Recalibrate")
@@ -280,6 +320,7 @@ def print_trainer_report(report: dict[str, Any], *, console: Console | None = No
     samples = cal.get("gradedSamples", 0) or 0
     console.print("\n[bold]Calibration[/]")
     _print_clv_headline(console, cal)
+    _print_correlation_mispricing(console, cal)
     console.print(f"  Model-scored graded samples: [bold]{samples}[/]")
     console.print(f"  Markets re-corrected: {cal.get('marketsCorrected', 0)}")
     console.print(f"  Correlation categories measured: {cal.get('correlationCategoriesMeasured', 0)}")

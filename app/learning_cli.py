@@ -71,6 +71,7 @@ def _calibrate() -> dict[str, Any]:
     report = build_calibration_report(persist=True)
     correlations = build_correlation_estimates(persist=True)
     invalidate_calibration_cache()
+    quote_model = PickLedger().load_quote_model()
     return {
         "gradedSamples": report["gradedSamples"],
         "marketsCorrected": len(report["corrections"]),
@@ -78,6 +79,11 @@ def _calibrate() -> dict[str, Any]:
         "correlationCategoriesMeasured": correlations["categoriesMeasured"],
         "clvOverall": report.get("clvOverall"),
         "clvByMarket": report.get("clvByMarket"),
+        "correlationMispricing": {
+            "globalScalar": quote_model.get("scalar"),
+            "samples": quote_model.get("samples"),
+            "byCategory": quote_model.get("byCategory") or {},
+        },
         "overall": report["overall"],
     }
 

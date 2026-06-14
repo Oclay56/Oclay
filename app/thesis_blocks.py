@@ -26,7 +26,7 @@ from collections import Counter, defaultdict
 from typing import Any
 
 from .correlation import joint_win_probability, leg_pair_category
-from .quote_model import slip_projection
+from .quote_model import correlation_edge, slip_projection
 
 # Hard same-game guardrails (mirrored from sgm_candidate_pool constants).
 BLOCK_MIN_LEGS = 2
@@ -300,6 +300,9 @@ def _finalize_block(
         "thesis": label["thesis"],
         "thesisTag": label["thesisTag"],
         "dominantCategory": label["dominantCategory"],
+        # Avenue 1: how much Stake mis-prices this block's correlation structure
+        # (real-quote-driven; > 1 ratio = structural overlay). Non-circular.
+        "correlationEdge": correlation_edge(legs),
         "evCurve": ev_curve,
         "withinGuardrails": (
             BLOCK_MIN_LEGS <= len(legs) <= BLOCK_MAX_LEGS
@@ -502,6 +505,7 @@ def _blueprint_metrics(blocks: list[dict[str, Any]]) -> dict[str, Any]:
     risk_adjusted = ev - FRAGILITY_PENALTY_WEIGHT * fragility * product_odds
     tilts = Counter((str((b.get('tilt') or {}).get('family')), str((b.get('tilt') or {}).get('side'))) for b in blocks)
     concentration = round(sum((c / len(blocks)) ** 2 for c in tilts.values()), 4)
+    correlation_edge = _slip_correlation_edge(blocks)
     return {
         "valid": True,
         "blockCount": len(blocks),
@@ -512,6 +516,46 @@ def _blueprint_metrics(blocks: list[dict[str, Any]]) -> dict[str, Any]:
         "concentration": concentration,
         "expectedValue": round(ev, 4),
         "riskAdjustedValue": round(risk_adjusted, 4),
+        "correlationEdge": correlation_edge,
+    }
+
+
+def _slip_correlation_edge(blocks: list[dict[str, Any]]) -> dict[str, Any]:
+    """Slip-level correlation mispricing: blocks' intra-game repricing edges
+    compound across games (independent), so the slip ratio is their product.
+
+    > 1 means Stake under-prices the slip's correlation structure overall -- a
+    real overlay stacked on top of whatever leg-level edge the legs carry.
+    """
+    ratios: list[float] = []
+    underpriced: list[str] = []
+    measured = False
+    for block in blocks:
+        edge = block.get("correlationEdge") or {}
+        ratio = _float(edge.get("edgeRatio"))
+        if ratio is None:
+            continue
+        ratios.append(ratio)
+        if edge.get("confidence") in {"measured", "thin"}:
+            measured = True
+        if edge.get("edgeDirection") == "stake_underprices_correlation":
+            underpriced.append(str(edge.get("category") or block.get("thesisTag")))
+    if not ratios:
+        return {"ratio": 1.0, "direction": "fairly_priced", "measured": False, "underpricedBlocks": []}
+    product = 1.0
+    for r in ratios:
+        product *= r
+    if product >= 1.05:
+        direction = "stake_underprices_correlation"
+    elif product <= 0.95:
+        direction = "stake_overcredits_correlation"
+    else:
+        direction = "fairly_priced"
+    return {
+        "ratio": round(product, 4),
+        "direction": direction,
+        "measured": measured,
+        "underpricedBlocks": underpriced,
     }
 
 
@@ -621,6 +665,7 @@ def _make_blueprint(
         "concentration": metrics["concentration"],
         "crossBlockRho": metrics["crossBlockRho"],
         "sharedFactorFragility": metrics["sharedFactorFragility"],
+        "correlationEdge": metrics.get("correlationEdge"),
         "thesisTags": [b.get("thesisTag") for b in blocks],
         "marginalContribution": _marginal_contributions(blocks),
         "blocks": [
@@ -634,6 +679,7 @@ def _make_blueprint(
                 "winProbability": b.get("winProbability"),
                 "rowIds": b.get("rowIds"),
                 "tilt": b.get("tilt"),
+                "correlationEdge": b.get("correlationEdge"),
             }
             for b in blocks
         ],

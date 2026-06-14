@@ -25,9 +25,10 @@ from __future__ import annotations
 
 import os
 import time
+from collections import Counter
 from typing import Any
 
-from .correlation import slip_probability_and_ev
+from .correlation import leg_pair_category, slip_probability_and_ev
 
 
 # The learned scalar is shrunk toward 1.0 (pure prior) until this many real
@@ -36,6 +37,32 @@ _LEARN_FULL_WEIGHT_SAMPLES = 40.0
 _RATIO_FLOOR = 0.25  # never predict Stake pays less than a quarter of product
 _CACHE_SECONDS = 300.0
 _model_cache: dict[str, Any] = {"loadedAt": 0.0, "model": None}
+
+# Correlation-mispricing edge: per-category repricing scalar shrunk toward the
+# global baseline by sample count. scalar > 1 means Stake's real quotes on this
+# structure run more generous than the realized-co-hit copula expects -- Stake
+# under-prices the correlation, a structural overlay. < 1 means it over-credits.
+_EDGE_FULL_WEIGHT_SAMPLES = 15.0
+_EDGE_UNDERPRICE_THRESHOLD = 1.05
+_EDGE_OVERCREDIT_THRESHOLD = 0.95
+_EDGE_MEASURED_MIN_SAMPLES = 12
+
+
+def _dominant_correlation_category(legs: list[dict[str, Any]]) -> str | None:
+    """The most common same-game pairwise correlation category across the legs.
+
+    Matches the categories the copula calibration measures phi for, so the
+    repricing scalar and the realized correlation are bucketed the same way.
+    """
+    categories: Counter[str] = Counter()
+    for i in range(len(legs)):
+        for j in range(i + 1, len(legs)):
+            category = leg_pair_category(legs[i], legs[j])
+            if category and category != "different_game":
+                categories[category] += 1
+    if not categories:
+        return None
+    return categories.most_common(1)[0][0]
 
 
 def predict_sgm_quote(legs: list[dict[str, Any]], *, model: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -103,30 +130,108 @@ def quote_observation(legs: list[dict[str, Any]], real_quote: float | None) -> d
     prior_ratio = prediction.get("priorRepricingRatio")
     if not product or prior_ratio in (None, 0):
         return None
-    # The scalar that would have made the prior exactly match reality.
+    # The scalar that would have made the prior exactly match reality. This is
+    # exactly M_model / M_stake_real -- the correlation-mispricing ratio: > 1
+    # means Stake's real quote credited less correlation than the copula.
     realized_scalar = (real_quote / product) / prior_ratio
     return {
         "productOdds": round(float(product), 4),
         "priorRepricingRatio": round(float(prior_ratio), 4),
         "realQuote": round(float(real_quote), 4),
         "realizedScalar": round(float(realized_scalar), 4),
+        "correlationCategory": _dominant_correlation_category(legs),
     }
 
 
+def _median(values: list[float]) -> float:
+    values = sorted(values)
+    k = len(values)
+    return values[k // 2] if k % 2 else (values[k // 2 - 1] + values[k // 2]) / 2
+
+
 def fit_quote_model(observations: list[dict[str, Any]]) -> dict[str, Any]:
-    """Fit the repricing scalar from logged observations (robust median)."""
-    scalars = [
-        _float(obs.get("realizedScalar"))
-        for obs in observations
-        if _float(obs.get("realizedScalar")) is not None
-    ]
-    scalars = [s for s in scalars if s is not None and 0.1 <= s <= 3.0]
-    n = len(scalars)
-    if n == 0:
-        return {"scalar": 1.0, "samples": 0}
-    scalars.sort()
-    median = scalars[n // 2] if n % 2 else (scalars[n // 2 - 1] + scalars[n // 2]) / 2
-    return {"scalar": round(median, 4), "samples": n}
+    """Fit the repricing scalar from logged observations (robust median).
+
+    Also buckets the scalar by correlation category for the mispricing edge.
+    """
+    all_scalars: list[float] = []
+    by_category: dict[str, list[float]] = {}
+    for obs in observations:
+        s = _float(obs.get("realizedScalar"))
+        if s is None or not (0.1 <= s <= 3.0):
+            continue
+        all_scalars.append(s)
+        category = obs.get("correlationCategory")
+        if category:
+            by_category.setdefault(str(category), []).append(s)
+    if not all_scalars:
+        return {"scalar": 1.0, "samples": 0, "byCategory": {}}
+    return {
+        "scalar": round(_median(all_scalars), 4),
+        "samples": len(all_scalars),
+        "byCategory": {
+            category: {"scalar": round(_median(vals), 4), "samples": len(vals)}
+            for category, vals in by_category.items()
+        },
+    }
+
+
+def correlation_edge(
+    legs: list[dict[str, Any]], *, model: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """How much Stake mis-prices THIS block's correlation structure.
+
+    Reads only the real-quote ``realizedScalar`` (M_model / M_stake_real),
+    bucketed by the block's dominant correlation category, shrunk toward the
+    global baseline by sample count. It never touches the predicted quote, so
+    it is not circular: a category whose scalar runs > 1 is one where Stake's
+    real quotes have historically been more generous than the realized-co-hit
+    copula expects -- a structural overlay you can hunt for.
+    """
+    model = model if model is not None else get_active_quote_model()
+    model = model or {}
+    global_scalar = _float(model.get("scalar")) or 1.0
+    category = _dominant_correlation_category(legs)
+    cat = ((model.get("byCategory") or {}).get(category) if category else None) or {}
+    samples = int(_float(cat.get("samples")) or 0)
+    raw = _float(cat.get("scalar"))
+
+    if raw is not None and samples > 0:
+        weight = samples / (samples + _EDGE_FULL_WEIGHT_SAMPLES)
+        scalar = (1.0 - weight) * global_scalar + weight * raw
+        confidence = "measured" if samples >= _EDGE_MEASURED_MIN_SAMPLES else "thin"
+    else:
+        scalar = global_scalar
+        confidence = "baseline" if model.get("samples") else "prior"
+
+    if scalar >= _EDGE_UNDERPRICE_THRESHOLD:
+        direction = "stake_underprices_correlation"
+        interpretation = (
+            f"Stake's real quotes on {category or 'this structure'} run more generous than "
+            "the realized-co-hit copula -- a structural correlation overlay."
+        )
+    elif scalar <= _EDGE_OVERCREDIT_THRESHOLD:
+        direction = "stake_overcredits_correlation"
+        interpretation = (
+            f"Stake over-credits {category or 'this structure'} correlation -- you would "
+            "overpay; prefer a structure Stake prices fairly or under-prices."
+        )
+    else:
+        direction = "fairly_priced"
+        interpretation = (
+            f"Stake prices {category or 'this structure'} correlation in line with realized co-hits."
+        )
+
+    return {
+        "category": category,
+        "samples": samples,
+        "stakeRepricingScalar": round(scalar, 4),
+        "edgeRatio": round(scalar, 4),
+        "vsGlobalBaseline": round(scalar / global_scalar, 4) if global_scalar else None,
+        "edgeDirection": direction,
+        "confidence": confidence,
+        "interpretation": interpretation,
+    }
 
 
 def get_active_quote_model(*, force_reload: bool = False) -> dict[str, Any] | None:

@@ -121,6 +121,30 @@ Honest dependency: the cross-block copula and per-thesis learning need graded
 volume. The engine launches on *structural* correlation (known stat
 relationships) and sharpens as real slips settle.
 
+## 6b. Correlation-mispricing edge (Avenue 1)
+
+Construction quality does not create edge — only a mispricing does. The one a
+parlay engine can systematically find is **correlation mispricing**: where
+Stake's `betFactor` credits a different amount of same-game correlation than
+actually occurs. The signal is already captured, non-circularly:
+
+`realizedScalar = (realQuote / productOdds) / priorRatio = M_model / M_stake_real`
+
+— the realized co-hit copula's correlation multiplier over the one Stake's real
+combined quote implies. It uses the **real Stake quote**, never the predicted
+quote (which is itself `product × copula-ratio × scalar`, so comparing to it
+would only recover the scalar). `> 1` means Stake credited *less* correlation
+than the realized co-hits show — the structure is **under-priced**, a structural
+overlay; `< 1` means it over-credits and you'd overpay.
+
+The improvement over the prior single global scalar: it is now measured **per
+correlation category** (`quote_model.correlation_edge`, fit in
+`pick_ledger.load_quote_model`, bucketed the same way the copula measures phi).
+So the system learns *which structures* Stake misprices, not just an average.
+Every block carries `correlationEdge`; blueprints compound them; the Trainer
+prints the per-category overlay hunt. Like CLV it is real-quote-driven, so it
+sharpens as combined quotes are logged.
+
 ## 6a. First-event markets (first hit / run / home run)
 
 Stake exposes first-event props under the backend keys `first_h`, `first_r`,

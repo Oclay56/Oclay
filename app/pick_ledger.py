@@ -834,14 +834,16 @@ class PickLedger:
                 conn.execute(
                     """
                     INSERT INTO quote_observations (
-                        product_odds, prior_ratio, real_quote, realized_scalar, recorded_at
-                    ) VALUES (?, ?, ?, ?, ?)
+                        product_odds, prior_ratio, real_quote, realized_scalar,
+                        correlation_category, recorded_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     (
                         _float_or_none(obs.get("productOdds")),
                         _float_or_none(obs.get("priorRepricingRatio")),
                         _float_or_none(obs.get("realQuote")),
                         scalar,
+                        obs.get("correlationCategory"),
                         now,
                     ),
                 )
@@ -850,22 +852,48 @@ class PickLedger:
         return recorded
 
     def load_quote_model(self) -> dict[str, Any]:
-        """Robust median repricing scalar over logged quote observations."""
+        """Robust median repricing scalar over logged quote observations.
+
+        Also buckets the scalar by correlation category: a category whose real
+        Stake quotes run systematically *more* generous than the realized-co-hit
+        copula expects (scalar > 1) is one Stake under-prices -- a structural
+        correlation overlay. ``byCategory`` carries those per-structure medians.
+        """
         with self._connect() as conn:
             try:
                 rows = conn.execute(
-                    "SELECT realized_scalar FROM quote_observations WHERE realized_scalar IS NOT NULL"
+                    "SELECT realized_scalar, correlation_category FROM quote_observations "
+                    "WHERE realized_scalar IS NOT NULL"
                 ).fetchall()
             except sqlite3.OperationalError:
-                return {"scalar": 1.0, "samples": 0}
-        scalars = sorted(
-            s for s in (float(row["realized_scalar"]) for row in rows) if 0.1 <= s <= 3.0
-        )
-        n = len(scalars)
-        if n == 0:
-            return {"scalar": 1.0, "samples": 0}
-        median = scalars[n // 2] if n % 2 else (scalars[n // 2 - 1] + scalars[n // 2]) / 2
-        return {"scalar": round(median, 4), "samples": n}
+                return {"scalar": 1.0, "samples": 0, "byCategory": {}}
+
+        def _median(values: list[float]) -> float:
+            values = sorted(values)
+            k = len(values)
+            return values[k // 2] if k % 2 else (values[k // 2 - 1] + values[k // 2]) / 2
+
+        all_scalars: list[float] = []
+        by_category: dict[str, list[float]] = {}
+        for row in rows:
+            s = float(row["realized_scalar"])
+            if not (0.1 <= s <= 3.0):
+                continue
+            all_scalars.append(s)
+            category = row["correlation_category"]
+            if category:
+                by_category.setdefault(str(category), []).append(s)
+
+        if not all_scalars:
+            return {"scalar": 1.0, "samples": 0, "byCategory": {}}
+        return {
+            "scalar": round(_median(all_scalars), 4),
+            "samples": len(all_scalars),
+            "byCategory": {
+                category: {"scalar": round(_median(vals), 4), "samples": len(vals)}
+                for category, vals in by_category.items()
+            },
+        }
 
     def summary(self) -> dict[str, Any]:
         with self._connect() as conn:
@@ -1032,6 +1060,12 @@ class PickLedger:
             "slip_legs": {
                 "block_index": "INTEGER",
                 "thesis_tag": "TEXT",
+            },
+            "quote_observations": {
+                # The block's dominant same-game correlation category, so the
+                # repricing scalar (Stake's real quote vs the copula) can be
+                # measured per structure -- the correlation-mispricing signal.
+                "correlation_category": "TEXT",
             },
         }
         for table, columns in wanted.items():
