@@ -128,6 +128,13 @@ def main(argv: list[str] | None = None) -> int:
         "--pretty", action="store_true", help="Render a formatted report instead of JSON."
     )
 
+    sharp_cmd = sub.add_parser(
+        "sharp-refresh", help="Pull sharp lines from The Odds API for line-shopping (Avenue 2)."
+    )
+    sharp_cmd.add_argument(
+        "--max-events", type=int, default=None, help="Cap games fetched (saves Odds API credits)."
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "grade":
@@ -157,6 +164,10 @@ def main(argv: list[str] | None = None) -> int:
         result = asyncio.run(_model_backtest(args.min_prior_games))
     elif args.command == "backfill-ids":
         result = asyncio.run(_backfill_ids())
+    elif args.command == "sharp-refresh":
+        from .odds_api import refresh_sharp_lines
+
+        result = asyncio.run(refresh_sharp_lines(max_events=args.max_events))
     elif args.command == "timing":
         result = asyncio.run(_timing(args.date))
     elif args.command == "loop":

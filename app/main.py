@@ -56,6 +56,7 @@ from .grading import grade_pending_picks
 from .pick_ledger import PickLedger
 from .probability_engine import invalidate_calibration_cache
 from .real_quote import real_quote_check_from_result
+from .odds_api import refresh_sharp_lines
 from .sharp_lines import get_active_sharp_lines, record_sharp_lines
 from .timing import build_timing_plan, games_from_mlb_schedule
 from .slate import DEFAULT_TIMEZONE
@@ -1729,6 +1730,27 @@ async def oclay_sharp_lines_ingest(
         entries = payload.get("entries") or payload.get("rows") or []
     result = record_sharp_lines(entries)
     return {"purpose": "oclay_sharp_lines_ingest", **result}
+
+
+@app.post("/oclay/sharp-lines/refresh")
+async def oclay_sharp_lines_refresh(
+    payload: dict[str, Any] = Body(default_factory=dict),
+) -> dict[str, Any]:
+    """Pull fresh sharp lines from The Odds API and load them for line-shopping.
+
+    Uses ``OCLAY_ODDS_API_KEY`` (or an ``apiKey`` in the body). ``maxEvents``
+    caps how many games are fetched -- handy for staying within the credit
+    quota, since event-odds requests are billed per market per game.
+    """
+    api_key = payload.get("apiKey") or os.getenv("OCLAY_ODDS_API_KEY")
+    if not api_key:
+        raise HTTPException(
+            status_code=422,
+            detail="No Odds API key. Set OCLAY_ODDS_API_KEY or pass apiKey in the body.",
+        )
+    max_events = payload.get("maxEvents")
+    result = await refresh_sharp_lines(api_key, max_events=max_events)
+    return {"purpose": "oclay_sharp_lines_refresh", **result}
 
 
 @app.get("/oclay/sharp-lines/status")
