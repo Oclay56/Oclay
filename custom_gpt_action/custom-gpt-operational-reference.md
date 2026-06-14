@@ -15,6 +15,16 @@ Think in this order: total merit score first, then evidence strength, then mode 
 
 Never reverse this order. Do not invent lines, odds, players, markets, row IDs, selection IDs, or unavailable props.
 
+## Response Size (compact vs verbose)
+
+Three actions return a **lean decision packet by default** so the chat context stays small; the full audit/diagnostic payload is always one flag away — nothing is removed from the system, only from the default response.
+
+- **Candidate pool** (`compact: true`, the default): you get `rankedCandidates` (lean rows), `slipBlueprints` (blocks with `rowIds` / `winProbability` / `payoutOdds` — the build inputs), `candidateCounts`, `rejectedSummary`, `marketPolicy.killedMarkets`, and a small `diagnosticsSummary`. The heavy blocks listed in `diagnosticsOmitted` (`perGame`, `slipProjections`, `portfolioExposure`, `lineCurveContest`, `marketContest`, `gameContest`, `contextCoverage`, `fullSlateComparison`, `researchCoverage`) are withheld — re-request with `compact: false` only when you actually need them. Build the slip from the compact packet; don't pull `compact: false` by default.
+- **Review-slip / review-slip-batch** (lean by default): you get `status`, `clickedLegs`, lean `selectedRows` (identity only), `missingSelections`, `realQuoteCheck` (the real combined Stake quote — the authoritative EV read), `warnings`, `safety`, and `clicks` (a count plus only the *failed* clicks). The full per-click audit, transaction plan, and per-row proof are withheld — pass `verbose: true` only when a build fails and you need to debug which click broke.
+- **Stake UI state** (lean by default): the sidebar text dump (`slip.rightPanelText`, up to 4000 chars) is replaced by the flags/counts plus a short `rightPanelTextSample`; pass `verbose: true` for the full text.
+
+Default to the lean packets. Only escalate to `compact: false` / `verbose: true` for a specific diagnostic need, one call at a time, so you don't reload the whole audit trail into context.
+
 ## Common Terms
 
 - `rowId`: stable clickable identity from the Stake UI helper.

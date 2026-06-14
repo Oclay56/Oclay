@@ -490,6 +490,9 @@ async def mlb_stake_ui_state(
         minimum=1,
         maximum=60,
     )
+    verbose = _bool_from_body(payload, "verbose", "verbose", False) or not _bool_from_body(
+        payload, "compact", "compact", True
+    )
     fixture_slug = str(payload.get("fixtureSlug") or "").strip()
     request = {
         "requestedBy": "custom_gpt",
@@ -543,7 +546,7 @@ async def mlb_stake_ui_state(
         "source": "stake_ui_state_via_local_helper",
         "purpose": "stake_ui_diagnostics",
         "bridge": _local_ui_bridge_summary(completed),
-        "state": completed.get("result") or {},
+        "state": (completed.get("result") or {}) if verbose else _lean_ui_state(completed.get("result") or {}),
     }
 
 
@@ -1199,6 +1202,9 @@ async def mlb_stake_ui_review_slip(
             detail="reviewOnly must be true. Oclay will not place bets or enter stake amounts.",
         )
 
+    verbose = _bool_from_body(payload, "verbose", "verbose", False) or not _bool_from_body(
+        payload, "compact", "compact", True
+    )
     matchup = _required_body_text(payload, "matchup")
     slate_date = _date_from_body(payload)
     timeout_seconds = _clean_int_from_body(
@@ -1330,7 +1336,9 @@ async def mlb_stake_ui_review_slip(
             "createdAt": completed.get("createdAt"),
             "completedAt": completed.get("completedAt"),
         },
-        "result": _compact_review_slip_result(result),
+        "result": (
+            _compact_review_slip_result(result) if verbose else _lean_review_slip_result(result)
+        ),
     }
 
 
@@ -1359,6 +1367,9 @@ async def mlb_stake_ui_review_slip_batch(
             detail="reviewOnly must be true. Oclay will not place bets or enter stake amounts.",
         )
 
+    verbose = _bool_from_body(payload, "verbose", "verbose", False) or not _bool_from_body(
+        payload, "compact", "compact", True
+    )
     slate_date = _date_from_body(payload)
     timeout_seconds = _clean_int_from_body(
         payload,
@@ -1459,7 +1470,11 @@ async def mlb_stake_ui_review_slip_batch(
             "createdAt": completed.get("createdAt"),
             "completedAt": completed.get("completedAt"),
         },
-        "result": _compact_batch_review_slip_result(result),
+        "result": (
+            _compact_batch_review_slip_result(result)
+            if verbose
+            else _lean_batch_review_slip_result(result)
+        ),
     }
 
 
@@ -2322,6 +2337,62 @@ def _compact_review_slip_result(result: dict[str, Any]) -> dict[str, Any]:
     return compact
 
 
+# Identity-only fields for a selected/clicked row in the lean build response.
+_LEAN_ROW_FIELDS = ("rowId", "player", "team", "market", "side", "line", "odds")
+
+
+def _lean_row(row: dict[str, Any]) -> dict[str, Any]:
+    return {key: row.get(key) for key in _LEAN_ROW_FIELDS if row.get(key) is not None}
+
+
+def _lean_review_slip_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Lean build decision packet (default).
+
+    Keeps what the GPT needs to judge a build -- status, the real combined Stake
+    quote, leg identities, what's missing, warnings, safety -- and collapses the
+    per-click audit trail (clickResults), the transaction plan, and the heavy
+    per-row payloads (selectionProof/probabilityAssessment) to a count plus only
+    the failures. Pass verbose=true (or compact=false) to get the full audit.
+    """
+    click_results = result.get("clickResults") or []
+    failed_clicks = [
+        _lean_row(row) | {"status": row.get("status"), "reason": row.get("reason")}
+        for row in click_results
+        if isinstance(row, dict) and row.get("status") != "clicked"
+    ]
+    add_bet = result.get("addBetResult") or {}
+    lean: dict[str, Any] = {
+        "source": result.get("source"),
+        "fixtureSlug": result.get("fixtureSlug"),
+        "capturedAt": result.get("capturedAt"),
+        "status": result.get("status"),
+        "reviewOnly": bool(result.get("reviewOnly", True)),
+        "clickedLegs": int(result.get("clickedLegs") or 0),
+        "selectedRows": [
+            _lean_row(row) for row in result.get("selectedRows") or [] if isinstance(row, dict)
+        ],
+        "missingSelections": result.get("missingSelections") or [],
+        "clicks": {
+            "attempted": len(click_results),
+            "clicked": sum(1 for r in click_results if isinstance(r, dict) and r.get("status") == "clicked"),
+            "failed": failed_clicks,
+        },
+        "addBetResult": {"status": add_bet.get("status"), "reason": add_bet.get("reason")},
+        "warnings": result.get("warnings") or [],
+        "safety": {
+            "enteredStakeAmount": False,
+            "clickedPlaceBet": False,
+            **(result.get("safety") or {}),
+        },
+        "verboseAvailable": "Pass verbose=true for the full click audit, transaction plan, and per-row proof.",
+    }
+    try:
+        lean["realQuoteCheck"] = real_quote_check_from_result(result)
+    except Exception as exc:  # noqa: BLE001 - never block the review response
+        lean["realQuoteCheck"] = {"status": "unavailable", "reason": str(exc)}
+    return lean
+
+
 def _compact_remove_sidebar_group_result(result: dict[str, Any]) -> dict[str, Any]:
     return {
         "source": result.get("source"),
@@ -2355,6 +2426,20 @@ def _compact_clear_sidebar_result(result: dict[str, Any]) -> dict[str, Any]:
             **(result.get("safety") or {}),
         },
     }
+
+
+def _lean_ui_state(state: dict[str, Any]) -> dict[str, Any]:
+    """Drop the verbatim sidebar text dump (slip.rightPanelText, up to 4000 chars)
+    from the diagnostics state, keeping every flag/count plus the short 260-char
+    sample. Pass verbose=true (or compact=false) to get the full text back."""
+    if not isinstance(state, dict):
+        return state
+    lean = dict(state)
+    slip = state.get("slip")
+    if isinstance(slip, dict):
+        lean["slip"] = {key: value for key, value in slip.items() if key != "rightPanelText"}
+        lean["slip"]["rightPanelTextOmitted"] = "rightPanelText withheld; re-request with verbose=true."
+    return lean
 
 
 def _local_ui_bridge_summary(completed: dict[str, Any]) -> dict[str, Any]:
@@ -2416,6 +2501,68 @@ def _compact_batch_review_slip_result(result: dict[str, Any]) -> dict[str, Any]:
             "clickedPlaceBet": False,
             **(result.get("safety") or {}),
         },
+    }
+
+
+def _lean_batch_review_slip_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Lean batch build packet (default): per-group status + leg identities + the
+    real quote, with the per-click audit trails collapsed to counts/failures. Pass
+    verbose=true (or compact=false) for the full per-group click audit."""
+    groups = []
+    for group in result.get("groups") or []:
+        if not isinstance(group, dict):
+            continue
+        click_results = group.get("clickResults") or []
+        failed_clicks = [
+            _lean_row(row) | {"status": row.get("status"), "reason": row.get("reason")}
+            for row in click_results
+            if isinstance(row, dict) and row.get("status") != "clicked"
+        ]
+        groups.append(
+            {
+                "matchup": group.get("matchup"),
+                "fixtureSlug": group.get("fixtureSlug"),
+                "status": group.get("status"),
+                "reviewOnly": bool(group.get("reviewOnly", True)),
+                "clickedLegs": int(group.get("clickedLegs") or 0),
+                "existingLegs": group.get("existingLegs"),
+                "reason": group.get("reason"),
+                "selectedRows": [
+                    _lean_row(row) for row in group.get("selectedRows") or [] if isinstance(row, dict)
+                ],
+                "missingSelections": group.get("missingSelections") or [],
+                "clicks": {
+                    "attempted": len(click_results),
+                    "clicked": sum(
+                        1 for r in click_results if isinstance(r, dict) and r.get("status") == "clicked"
+                    ),
+                    "failed": failed_clicks,
+                },
+                "warnings": group.get("warnings") or [],
+            }
+        )
+
+    return {
+        "source": result.get("source"),
+        "capturedAt": result.get("capturedAt"),
+        "status": result.get("status"),
+        "reviewOnly": bool(result.get("reviewOnly", True)),
+        "fixtureCount": int(result.get("fixtureCount") or 0),
+        "processedGroups": int(result.get("processedGroups") or 0),
+        "clickedGroups": int(result.get("clickedGroups") or 0),
+        "skippedExistingGroups": int(result.get("skippedExistingGroups") or 0),
+        "completedGroupCount": int(result.get("completedGroupCount") or 0),
+        "clickedLegs": int(result.get("clickedLegs") or 0),
+        "stopReason": result.get("stopReason"),
+        "lastAttemptedGroup": result.get("lastAttemptedGroup"),
+        "resumeSafe": result.get("resumeSafe"),
+        "groups": groups,
+        "safety": {
+            "enteredStakeAmount": False,
+            "clickedPlaceBet": False,
+            **(result.get("safety") or {}),
+        },
+        "verboseAvailable": "Pass verbose=true for full per-group click audit and transaction plans.",
     }
 
 

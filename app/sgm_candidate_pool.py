@@ -59,21 +59,98 @@ SUPPORTED_MODES = {
 }
 
 
+# Top-level pool keys that stay in the compact decision packet verbatim. These
+# are small and decision-relevant (the GPT needs them to pick + build). Heavy
+# diagnostics (perGame projections, marketContest/gameContest internals,
+# lineCurveContest value leaders, slipProjections, contextCoverage, etc.) are
+# dropped from compact and listed under diagnosticsOmitted -- they are not lost,
+# just one flag away via compact=false.
+_COMPACT_POOL_KEEP_KEYS = (
+    "source",
+    "decisionOwner",
+    "builderRole",
+    "mode",
+    "date",
+    "slateSummary",
+    "filters",
+    "guardrails",
+    "candidateCounts",
+    "rejectedSummary",
+    "boardBatch",
+    "bridge",
+    "ledger",
+)
+
+# Heavy keys intentionally withheld from the compact packet (named back to the
+# GPT so it knows what it can fetch with compact=false).
+_COMPACT_POOL_OMITTED_KEYS = (
+    "perGame",
+    "slipProjections",
+    "portfolioExposure",
+    "lineCurveContest",
+    "marketConcentration",
+    "marketContest",
+    "gameContest",
+    "contextCoverage",
+    "fullSlateComparison",
+    "researchCoverage",
+)
+
+
 def compact_sgm_candidate_pool_response(pool: dict[str, Any]) -> dict[str, Any]:
-    compact = dict(pool)
-    compact["compact"] = True
+    """Return a lean decision packet: the rows + blueprints the GPT needs to pick
+    and build, plus small status keys. Heavy justification/diagnostic blocks are
+    summarized and named under ``diagnosticsOmitted`` rather than dumped, so the
+    chat context stays small without losing access to anything (compact=false
+    returns the full pool)."""
+    compact: dict[str, Any] = {"compact": True}
+    for key in _COMPACT_POOL_KEEP_KEYS:
+        if key in pool:
+            compact[key] = pool[key]
+
     compact["rankedCandidates"] = [
         _compact_candidate_pool_row(row)
         for row in pool.get("rankedCandidates") or []
         if isinstance(row, dict)
     ]
-    blueprints = compact.get("slipBlueprints")
+    blueprints = pool.get("slipBlueprints")
     if isinstance(blueprints, dict):
         compact["slipBlueprints"] = _compact_slip_blueprints(blueprints)
-    notes = list(compact.get("notes") or [])
-    notes.append(
-        "Compact mode returns lean candidate rows only; call with compact=false or fetch the SGM board for full per-row context."
-    )
+
+    # Collapse the market kill-switch to just the actionable list (avoid these).
+    market_policy = pool.get("marketPolicy")
+    if isinstance(market_policy, dict):
+        compact["marketPolicy"] = {
+            "killedMarkets": market_policy.get("killedMarkets") or [],
+            "downweightedRows": market_policy.get("downweightedRows"),
+            "active": bool(market_policy.get("active")),
+        }
+
+    # One tiny situational-awareness summary instead of the full diagnostic blocks.
+    per_game = pool.get("perGame")
+    line_curve = pool.get("lineCurveContest") or {}
+    research = pool.get("researchCoverage") or {}
+    compact["diagnosticsSummary"] = {
+        "gamesProcessed": len(per_game) if isinstance(per_game, dict) else None,
+        "lineCurveContestedGroups": line_curve.get("contestedGroups"),
+        "allReturnedRowsResearched": research.get("allReturnedRowsResearched"),
+        "marketExposure": pool.get("marketExposure") or {},
+    }
+    compact["diagnosticsOmitted"] = [
+        key for key in _COMPACT_POOL_OMITTED_KEYS if key in pool
+    ]
+    notes = [
+        "Compact decision packet: ranked rows + slip blueprints (row IDs, win "
+        "probability, payout) are the build inputs; marketPolicy.killedMarkets "
+        "lists markets to avoid.",
+        "Heavy per-row/per-game diagnostics (see diagnosticsOmitted) are withheld "
+        "to keep context small -- re-request with compact=false to get them.",
+    ]
+    # Carry forward any actionable warning notes (e.g. the rate-limit cool-down
+    # guidance) that the boilerplate notes don't already cover.
+    for note in pool.get("notes") or []:
+        if isinstance(note, str) and "rate-limited" in note.lower():
+            notes.append(note)
     compact["notes"] = notes
     return compact
 

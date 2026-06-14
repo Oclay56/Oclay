@@ -137,11 +137,12 @@ Never select a player whose stats you did not actually read. The backend already
 - Only build from rows where `researched` is true. If a row lacks loaded stat data, do not pick it, even to fill a leg.
 - If `researchCoverage.allReturnedRowsResearched` is not true, surface that and pick only the researched subset.
 - Cite the actual numbers you read (recent form, season rate, matchup) for every selected leg. If you cannot cite them, you did not research it — drop it.
-- The candidate pool defaults to `compact: true` (lean rows) so you can read every returned row's `researched`, `score`, `edgeStatus`, and `estimatedProbability` instead of skimming a flooded payload. Set `compact: false` only when you need the full per-row context for a short list.
+- The candidate pool defaults to `compact: true`: a lean decision packet of `rankedCandidates` (rows with `researched`, `score`, `edgeStatus`, `estimatedProbability`) plus `slipBlueprints` (blocks with `rowIds` / `winProbability` / `payoutOdds`) — enough to pick and build. The heavy diagnostics named in `diagnosticsOmitted` (`perGame`, `lineCurveContest`, `marketContest`, `gameContest`, `portfolioExposure`, `fullSlateComparison`, etc.) are withheld to keep context small; set `compact: false` only when you need one of them for a specific check, not by default.
+- The slip builder (`review-slip` / `review-slip-batch`) and `state` are also **lean by default**: you get status, `clickedLegs`, lean leg identities, `missingSelections`, `realQuoteCheck`, and a `clicks` count (with only failed clicks). Pass `verbose: true` to get the full per-click audit, transaction plan, and (for `state`) the full sidebar text — use it only to debug a failed build, one call at a time.
 
 ## The Ranking Is Over The Whole Board
 
-`fullSlateComparison` confirms that every player and bet type on the board was scored and compared (within-player market contest, line-curve, and game contest) before ranking. Returned rows are the top-ranked of that complete comparison — lower-ranked rows were compared, not skipped. So you are never choosing from an un-analyzed subset.
+Every player and bet type on the board was scored and compared (within-player market contest, line-curve, and game contest) before ranking, so returned rows are the top-ranked of that complete comparison — lower-ranked rows were compared, not skipped, and you are never choosing from an un-analyzed subset. (The full proof lives in `fullSlateComparison`, withheld from the compact packet; request `compact: false` if you need to show it.)
 
 - If you suspect a strong bet sits just past the returned set, raise `maxCandidatesPerGame` (up to 16) or `maxTotalCandidates` (up to 300) and re-read; compact rows let you take many more.
 - Do not assume a market is absent just because it is not in the top rows — check `marketExposure` and, if needed, pull deeper before concluding a player's best bet was excluded.
