@@ -10,7 +10,11 @@ from app.main import (
     _lean_review_slip_result,
     _lean_ui_state,
 )
-from app.sgm_candidate_pool import compact_sgm_candidate_pool_response
+from app.real_quote import real_quote_ev
+from app.sgm_candidate_pool import (
+    _compact_candidate_pool_row,
+    compact_sgm_candidate_pool_response,
+)
 
 
 def _full_pool() -> dict:
@@ -109,6 +113,77 @@ def test_compact_pool_keeps_decision_keys_and_drops_heavy_diagnostics():
 def test_compact_pool_carries_forward_rate_limit_warning():
     compact = compact_sgm_candidate_pool_response(_full_pool())
     assert any("rate-limited" in note.lower() for note in compact["notes"])
+
+
+def test_compact_row_surfaces_ledger_gate_fields():
+    # The Decision Ledger's robustness/sharp gates must be satisfiable from the
+    # lean row without a compact=false round-trip.
+    row = {
+        "rowId": "r1",
+        "player": "Aaron Judge",
+        "market": "Total Bases",
+        "side": "over",
+        "line": 1.5,
+        "odds": 1.9,
+        "probabilityAssessment": {
+            "edgeStatus": "clear_possible_edge",
+            "edgeReference": "devigged_fair_probability",
+            "dataQuality": "high",
+            "impliedProbability": 0.53,
+            "fairProbability": 0.5,
+            "estimatedProbability": 0.57,
+            "adjustedEstimatedProbability": 0.57,
+            "edge": 0.07,
+            "conservativeEdge": 0.02,  # > 0 -> robust
+        },
+    }
+    compact = _compact_candidate_pool_row(row)
+    assert compact["dataQuality"] == "high"
+    assert compact["fairProbability"] == 0.5
+    assert compact["edge"] == 0.07
+    assert compact["conservativeEdge"] == 0.02
+    assert compact["edgeRobustToUncertainty"] is True
+
+
+def test_compact_row_marks_edge_not_robust_when_conservative_edge_negative():
+    row = {
+        "rowId": "r2",
+        "probabilityAssessment": {"edge": 0.04, "conservativeEdge": -0.01},
+    }
+    compact = _compact_candidate_pool_row(row)
+    assert compact["edgeRobustToUncertainty"] is False
+
+
+def test_compact_row_robustness_none_when_no_positive_edge():
+    row = {"rowId": "r3", "probabilityAssessment": {"edge": -0.02, "conservativeEdge": -0.05}}
+    assert _compact_candidate_pool_row(row)["edgeRobustToUncertainty"] is None
+
+
+def test_real_quote_ev_reports_downside_at_the_real_quote():
+    # Two legs each carrying a confidence interval -> the slip win-prob band is
+    # real, so the EV range at the actual quote is bracketed (downside < point).
+    legs = [
+        {
+            "normalizedMarketKey": "hits",
+            "side": "over",
+            "odds": 1.7,
+            "winProbability": 0.6,
+            "confidenceInterval": {"low": 0.45, "high": 0.75},
+        },
+        {
+            "normalizedMarketKey": "total_bases",
+            "side": "over",
+            "odds": 1.8,
+            "winProbability": 0.55,
+            "confidenceInterval": {"low": 0.4, "high": 0.7},
+        },
+    ]
+    check = real_quote_ev(legs, quoted_odds=4.0)
+    assert check["status"] == "evaluated"
+    assert check["winProbabilityRange"] is not None
+    assert check["realExpectedValueRange"] is not None
+    # Downside (pessimistic win prob priced at the real quote) is below the point EV.
+    assert check["realEvDownsidePerUnit"] <= check["realExpectedValue"]
 
 
 def _build_result() -> dict:

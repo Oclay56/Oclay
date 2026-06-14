@@ -25,6 +25,38 @@ Three actions return a **lean decision packet by default** so the chat context s
 
 Default to the lean packets. Only escalate to `compact: false` / `verbose: true` for a specific diagnostic need, one call at a time, so you don't reload the whole audit trail into context.
 
+## Mandatory Pipeline (every build & review)
+
+This is the required process. Do not shortcut it to the simple "read board → pick rows → build" path — the system's edge lives in signals the candidate pool already returns, and skipping them is the default failure mode. **You may not call `buildStakeUiReviewSlip` / `buildStakeUiReviewSlipBatch` until the Decision Ledger is filled and `validateSelections` has passed.**
+
+1. **Frame (no tool).** State the target: odds band (`targetOddsMin` / `targetOddsMax` for extreme longshots), longshot vs normal, filters (all-under, market), number of games and legs.
+2. **Board truth — one call.** `getStakeUiMlbGames` (multi-game → fixture slugs), then `buildStakeUiSgmCandidatePool` (compact). This single call enriches MLB context and computes every signal server-side. Call it **once** per build session — never per game. Cap `maxGames` / `maxTotalCandidates` so it stays fast and within limits.
+3. **Decision Ledger — read, no new calls.** See the dedicated section below. This is the gate that forces the full system into use.
+4. **Construct from blueprints.** Build from `slipBlueprints` / `frontier` (and `bandBlueprints` if a band was passed); pick a named `frontier` rung (`anchor` → `moonshot`). Don't hand-assemble legs that ignore the block structure.
+5. **Validate.** `validateSelections` on the exact chosen legs. Any failure → fix or drop. No build until it passes.
+6. **Build + real-quote gate.** `buildStakeUiReviewSlip` / `…Batch`, then read `realQuoteCheck` (`realExpectedValue`, `realEvDownsidePerUnit`, `correlationRepricingGap`, `verdict`). `negative_ev_at_real_quote` or a sharply negative downside → surface it and reconsider; never silently present a −EV slip.
+7. **Present + offer to log.** Table (fair prob, estimated prob, edge, slip win probability, EV range, risks), then offer `recordSlip` once.
+
+**Conditional tools** (out of the default flow, fire only on a trigger): `getPropContextBatch` (≤20) or single-player MLB tools (`getPlayerRecentLogs`, `getPlayerSeasonStats`, `getProbablePitchers`, `getSpecificPropContext`, `getPlayerMlbContext`) **only** to cite a finalist's numbers or answer a challenge — **never board-wide** (that is the timeout trap); `getStakeUiSgmBoard` for raw one-fixture rows or a stale pool; `getMarketMap` for an unmapped name; `readStakeUiState` (verbose to see full sidebar) on a failed/stale build; `clearStakeUiSgmSelections` / `removeStakeUiSidebarGroup` / `clearStakeUiSidebar` for recovery; `compact:false` / `verbose:true` for one diagnostic at a time; the data-API tools (`getMatchups`, `getSchedule`, `getMatchupProps`, `getComparisonBoard`, `buildSlipCandidates`) only when the UI helper is unavailable.
+
+**Signals you consume but cannot call:** `marketPolicy.killedMarkets`, calibration corrections, and `sharpLineSignal` come from local jobs (grading, calibration, sharp-line refresh) that run outside the GPT on their own schedule. You read their baked-in output in the candidate pool; you never call them and must not claim to refresh, grade, or recalibrate.
+
+## Decision Ledger (required before any build)
+
+Before choosing legs, emit a short ledger for each finalist, read entirely from the Step-2 compact response (no new calls). Every field is in the compact row or blueprint; if one is genuinely absent, write `unavailable` — never silently omit it:
+
+| Ledger field | Source |
+| --- | --- |
+| `edge` / `edgeStatus` / `edgeReference` / `dataQuality` | candidate row |
+| `edgeRobustToUncertainty` + `conservativeEdge` | candidate row |
+| `sharpLineSignal` (`beats_sharp_consensus` / `worse_than_sharp_consensus` / `matched:false`) | candidate row |
+| `staleLineSignal` (fresh? `trigger`? direction) | candidate row |
+| `correlationEdge` + correlation tax | block / row |
+| `marketPolicy.killedMarkets` / `downweightedRows` | pool |
+| `researchCoverage.allReturnedRowsResearched` | pool |
+
+Then gate on it: **drop or downgrade** any leg in a killed market, with `negative_edge` at medium/high `dataQuality`, with `edgeRobustToUncertainty: false`, with `worse_than_sharp_consensus`, or not researched. **Favor** legs with `beats_sharp_consensus`, a fresh `staleLineSignal`, or `stake_underprices_correlation`. The detailed meaning of each field is in the term sections below.
+
 ## Common Terms
 
 - `rowId`: stable clickable identity from the Stake UI helper.
@@ -56,9 +88,9 @@ Default to the lean packets. Only escalate to `compact: false` / `verbose: true`
 - `lineCurve` / `lineCurveContest.valueLeaders`: the highest-EV line/side within a player-market; dominated lines are deprioritized.
 - `marketPolicy.killedMarkets`: markets excluded for negative realized ROI over graded picks; rows may be tagged `market_downweighted_negative_realized_edge`.
 - `meanAdjustments`: handedness, Log5 strikeout, and park-factor sharpening applied to the per-game mean before the probability.
-- `realQuoteCheck` (review-slip result): `realExpectedValue` and `correlationRepricingGap` versus Stake's actual combined SGM quote — the most authoritative EV read.
+- `realQuoteCheck` (review-slip result): `realExpectedValue` and `correlationRepricingGap` versus Stake's actual combined SGM quote — the most authoritative EV read. `realExpectedValueRange` / `realEvDownsidePerUnit` price the slip's win-probability error bar against the *real* quote (the honest downside), and `winProbabilityRange` is the quote-independent uncertainty on the win probability.
 - `predictedQuote` (slip projections): the repriced SGM price Stake is expected to quote; slip `expectedValue` is computed against it, not the inflated product of legs.
-- `confidenceInterval` / `conservativeWinProbability` / `conservativeEdge`: the sample-driven uncertainty on the estimate; a wide interval (tag `wide_probability_interval_thin_sample`) means thin data, and `conservativeEdge <= 0` (tag `edge_not_robust_to_uncertainty`) means the edge does not survive that uncertainty.
+- `confidenceInterval` / `conservativeWinProbability` / `conservativeEdge`: the sample-driven uncertainty on the estimate; a wide interval (tag `wide_probability_interval_thin_sample`) means thin data, and `conservativeEdge <= 0` (tag `edge_not_robust_to_uncertainty`) means the edge does not survive that uncertainty. The compact row also carries `edgeRobustToUncertainty` (true/false/None) so the Decision Ledger's robustness gate is satisfiable without `compact: false`.
 - `portfolioExposure`: cross-game player/team/game concentration so the slate is not piled onto one player or game; over-exposure raises `concentrationFlags`.
 - `meanAdjustments` now also includes `weather` (temperature + wind on power/contact markets) alongside handedness, Log5, and park.
 

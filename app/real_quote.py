@@ -56,11 +56,15 @@ def real_quote_ev(
     projection = slip_probability_and_ev(selected_legs)
     win = projection.get("estimatedWinProbability")
     product_odds = projection.get("rawProductOdds")
+    win_range = projection.get("winProbabilityRange")
     result: dict[str, Any] = {
         "modeledWinProbability": win,
         "productOfLegOdds": product_odds,
         "quotedOdds": quoted_odds,
         "fullyPriced": projection.get("fullyPriced"),
+        # Honest, quote-independent uncertainty on the slip win probability.
+        "winProbabilityRange": win_range,
+        "uncertaintyFromLegIntervals": projection.get("uncertaintyFromLegIntervals"),
     }
     if quoted_odds is None or quoted_odds <= 1.0:
         result["status"] = "quote_unavailable"
@@ -76,17 +80,32 @@ def real_quote_ev(
     repricing_gap = (
         round(quoted_odds - product_odds, 4) if product_odds else None
     )
+    # EV under uncertainty AT THE REAL QUOTE: bracket the win probability by its
+    # error bar and price both ends against Stake's actual combined odds, so the
+    # build-step robustness gate reads a consistent downside (not a vs-product one).
+    real_ev_range = None
+    real_ev_downside = None
+    if isinstance(win_range, (list, tuple)) and len(win_range) == 2:
+        lo, hi = win_range[0], win_range[1]
+        if isinstance(lo, (int, float)) and isinstance(hi, (int, float)):
+            ev_lo = round(lo * (quoted_odds - 1.0) - (1.0 - lo), 4)
+            ev_hi = round(hi * (quoted_odds - 1.0) - (1.0 - hi), 4)
+            real_ev_range = [ev_lo, ev_hi]
+            real_ev_downside = ev_lo
     result.update(
         {
             "status": "evaluated",
             "realExpectedValue": real_ev,
+            "realExpectedValueRange": real_ev_range,
+            "realEvDownsidePerUnit": real_ev_downside,
             "productExpectedValue": product_ev,
             "correlationRepricingGap": repricing_gap,
             "verdict": _verdict(real_ev),
             "note": (
                 "realExpectedValue uses the actual Stake combined odds; a negative "
                 "correlationRepricingGap means Stake priced the SGM below the naive "
-                "product of legs."
+                "product of legs. realEvDownsidePerUnit is EV at the pessimistic end "
+                "of the win-probability band against the real quote."
             ),
         }
     )
@@ -135,6 +154,10 @@ def _leg_from_selected_row(row: dict[str, Any]) -> dict[str, Any]:
         "side": row.get("side"),
         "odds": row.get("odds"),
         "winProbability": probability.get("estimatedProbability"),
+        # Carry the per-leg uncertainty so the slip win-probability band (and the
+        # real-quote EV downside) reflects real interval width, not a degenerate point.
+        "confidenceInterval": probability.get("confidenceInterval"),
+        "conservativeWinProbability": probability.get("conservativeWinProbability"),
     }
 
 

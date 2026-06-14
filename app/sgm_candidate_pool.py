@@ -204,11 +204,19 @@ def _compact_candidate_pool_row(row: dict[str, Any]) -> dict[str, Any]:
         "availabilityRole": (row.get("selectionProof") or {}).get("availabilityRole")
         or row.get("availabilityRole"),
         "edgeStatus": (row.get("probabilityAssessment") or {}).get("edgeStatus"),
+        "edgeReference": (row.get("probabilityAssessment") or {}).get("edgeReference"),
+        "dataQuality": (row.get("probabilityAssessment") or {}).get("dataQuality"),
         "impliedProbability": (row.get("probabilityAssessment") or {}).get("impliedProbability"),
+        "fairProbability": (row.get("probabilityAssessment") or {}).get("fairProbability"),
         "estimatedProbability": (row.get("probabilityAssessment") or {}).get("estimatedProbability"),
         "adjustedEstimatedProbability": (row.get("probabilityAssessment") or {}).get(
             "adjustedEstimatedProbability"
         ),
+        "edge": (row.get("probabilityAssessment") or {}).get("edge"),
+        # Uncertainty-robustness scalars so the mandatory robustness gate is
+        # satisfiable from the lean packet (no compact=false round-trip needed).
+        "conservativeEdge": (row.get("probabilityAssessment") or {}).get("conservativeEdge"),
+        "edgeRobustToUncertainty": _edge_robust_to_uncertainty(row.get("probabilityAssessment") or {}),
         "matchupFactor": ((row.get("probabilityAssessment") or {}).get("inputs") or {}).get(
             "matchupFactor"
         ),
@@ -217,6 +225,20 @@ def _compact_candidate_pool_row(row: dict[str, Any]) -> dict[str, Any]:
         "staleLineSignal": _compact_stale_line(row.get("staleLineSignal")),
         "sharpLineSignal": _compact_sharp_line(row.get("sharpLineSignal")),
     }
+
+
+def _edge_robust_to_uncertainty(assessment: dict[str, Any]) -> bool | None:
+    """True/False when the edge survives its own error bar, None when there is no
+    edge to test. Lets the GPT gate on robustness from the compact row: a positive
+    point edge whose conservativeEdge is <= 0 is NOT robust (tag
+    edge_not_robust_to_uncertainty)."""
+    edge = assessment.get("edge")
+    conservative = assessment.get("conservativeEdge")
+    if not isinstance(edge, (int, float)) or edge <= 0:
+        return None
+    if not isinstance(conservative, (int, float)):
+        return None
+    return conservative > 0
 
 
 def _compact_stale_line(signal: dict[str, Any] | None) -> dict[str, Any] | None:
