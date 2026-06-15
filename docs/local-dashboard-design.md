@@ -172,16 +172,25 @@ they can be retired once the TUI covers their flows.
 - **Don't over-build the brain.** It exists. The work is presentation + the
   diversity objective + novelty memory.
 
-## 11. Proposed build order (each phase usable on its own)
-1. **Slate-scan + band API** — one endpoint: scan (cache/throttle-aware) →
-   return the labeled ladder across magnitudes + a per-band exposure summary.
-2. **Read-only dashboard** — render the band menu + cards + exposure meter from
-   that endpoint. No building yet; just *see* what the engine proposes.
-3. **Click-to-build** — wire a band card to validate + build + real-quote + log.
-4. **Type-a-target box** — arbitrary target band → same pipeline.
-5. **Diversity-as-objective + novelty memory** — the anti-hits/anti-repeat upgrade.
-6. **Dynamic layer** — live re-rank, progressive load, re-roll.
-7. **(Optional) local NL** — shorthand bar, then a local model if wanted.
+## 11. Build order (each phase usable on its own)
+1. **Slate-scan + band API** — one endpoint: batched, throttle/cache-aware scan
+   over the full slate → the adaptive labeled ladder across reachable magnitudes
+   + a per-band exposure summary. Read-only.
+2. **Start + decision screen (read-only)** — the new `Start` flow renders the live
+   scan status + the adaptive band menu. No building yet; just *see* what the
+   engine proposes (§14).
+3. **Rich slip preview** — per-game cards, structure label, per-leg edge/why,
+   slip win-prob + EV range. Still no building (this is "Review").
+4. **Build button** — a card's `Build` action → validate → click into the Stake
+   slip → real-quote check → auto-log (§14).
+5. **Custom target input** — type an arbitrary target band → same pipeline.
+6. **Merit-honest variety + novelty surfacing** — edge-first (no dial); novelty
+   flagged as display/tiebreaker only (§4).
+7. **Dynamic layer** — live re-rank, progressive load, re-roll.
+8. **Menu reorg + hotkey remap** — remove Review/Build from the main menu, add
+   `Start` (`ctrl+s`), move `Stop` to `ctrl+d` (§15).
+9. **Retire the Custom GPT** — remove the action schema + instruction files once
+   the TUI covers their flows (§9).
 
 ## 12. Decisions — settled
 
@@ -229,3 +238,113 @@ OCLAY/
   background alongside the TUI, so the bands screen just calls
   `http://127.0.0.1:8000` — no extra process to manage. (With the GPT removed, the
   tunnel is no longer needed for the product, only the local API.)
+
+## 14. TUI flow & screens (start to finish)
+
+The guiding rule: **everything is a Review (a preview) until you press Build.**
+"Review" and "Build" are *roles*, not an upfront fork — you never re-scan to go
+from looking to placing.
+
+### End-to-end
+```
+Main menu ──Start (ctrl+s)──► Decision screen
+   │                              │
+   │   Chrome (already alive) navigates to the Stake MLB fixtures page,
+   │   the batched scan begins, and the engine scores boards as they land
+   │   (progressive). The adaptive band menu fills in with real reachable
+   │   magnitudes + a Custom target input.
+   │                              │
+   │   Pick a band ──► slip already computed by the frontier ──► rich preview
+   │                              │
+   │              [ Build ]  [ Re-roll ]  [ Back ]
+   │                  │
+   │   Build ──► validate ──► click legs into the real Stake slip ──►
+   │            show REAL Stake quote vs estimate ──► auto-log ──► you place.
+   └─────────────────────────────────────────────────────────────────────────
+```
+
+Step list: **Start → decision screen (Chrome opens + batched scan + engine) →
+adaptive band menu / custom target → instant rich preview → Build → real-quote →
+place.**
+
+### Screen 1 — Main menu (decluttered)
+Review/Build are gone from here; `Start` replaces them.
+```
+  OCLAY  [ready]
+  ─────────────────────────────
+  Start    ctrl+s     Trainer  ctrl+t
+  Clean    ctrl+c     Honest   ctrl+h
+  Domain   ctrl+q     ROI      ctrl+p
+  Stop     ctrl+d     RGB      ctrl+g
+  Exit     ctrl+e
+  Job queue: Local SQLite (idle)
+```
+
+### Screen 2 — Decision screen (scan + band menu)
+```
+  ┌ OCLAY — Decision ─────────────────────────────────┐
+  │ Scanning games…  6/15   (rate-limit safe, batched)│
+  │                                                   │
+  │ Target band:                                      │
+  │   50x    500x    5,000x    ~90,000x (max tonight) │
+  │   ▸ Custom: [ 50k        ]                        │
+  │                                                   │
+  │ States: Generating candidate pools… ▸ Selecting   │
+  │         final legs…                               │
+  └───────────────────────────────────────────────────┘
+```
+Adaptive: the menu only shows magnitudes the board actually reaches; an
+unreachable custom target shows "best reachable: ~90k."
+
+### Screen 3 — Rich slip preview (this is "Review")
+```
+  ┌ Slip preview ─────────────────────────────────────┐
+  │ Mode: Build      Target: 50,000x                  │
+  │ Structure: 2 unders per game / 15-game build (50x³)│
+  │ Est. odds: ~52,400x   Win prob: 0.9–1.4%          │
+  │ EV range: +0.03 / −0.08                           │
+  │                                                   │
+  │  Game 1 — Phillies @ Marlins                      │
+  │   • J. Realmuto  Hits   U1.5  1.74   edge +6%     │
+  │   • B. Marsh     TB     U1.5  1.91   sharp ✓      │
+  │  Game 2 — Yankees @ Red Sox                       │
+  │   • A. Judge     TB     U1.5  1.80   stale-line ✓ │
+  │   • …                                             │
+  │                                                   │
+  │ [ Build ]   [ Re-roll ]   [ Back ]                │
+  └───────────────────────────────────────────────────┘
+```
+Grouped by game, per-leg edge/why, slip-level win-prob + EV range. Polished rich
+panels (Textual), not terminal spam.
+
+### Screen 4 — After Build
+Legs are clicked into the real Stake slip; the screen shows the **real combined
+Stake quote vs the estimate** (the real-quote check), confirms auto-log, and hands
+off to you to review/place in Stake. Review-only — never enters a stake amount or
+clicks the final wager button.
+
+### States (polished, never crashes)
+`Scanning games… n/15` · `Generating candidate pools…` · `Selecting final legs…` ·
+`Building slip…` · `Stake is throttling — cooling down (11/15 scanned)` ·
+`Best reachable: ~90k` · `No edge tonight at this band`.
+
+## 15. Hotkeys & menu map
+
+| Action | Old key | New key | Notes |
+| --- | --- | --- | --- |
+| **Start** | — (new) | **`ctrl+s`** | replaces Review/Build on the main menu |
+| **Stop** | `ctrl+s` | **`ctrl+d`** | moved to free `ctrl+s` for Start |
+| Review | `ctrl+r` | — | leaves the main menu; becomes the *preview* inside Start |
+| Build | `ctrl+b` | — | leaves the main menu; becomes the *Build button* inside Start |
+| Trainer | `ctrl+t` | `ctrl+t` | unchanged |
+| Honest | `ctrl+h` | `ctrl+h` | unchanged |
+| ROI | `ctrl+p` | `ctrl+p` | unchanged |
+| Clean | `ctrl+c` | `ctrl+c` | unchanged |
+| Domain | `ctrl+q` | `ctrl+q` | unchanged |
+| RGB | `ctrl+g` | `ctrl+g` | unchanged |
+| Exit | `ctrl+e` | `ctrl+e` | unchanged |
+
+`ctrl+z` was rejected (it conventionally means undo / suspend-process and can
+freeze the app). The rebind + the Review/Build menu removal land **together in
+build step 8**, not in isolation now — changing one key before the menu reorg
+would desync the live TUI from this plan.
