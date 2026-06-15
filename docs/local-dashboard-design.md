@@ -141,19 +141,26 @@ construction and letting the user pick.
   on a full sweep.
 - **Re-roll** — regenerate an alternative non-dominated slip at a band on demand.
 
-## 8. The one real constraint: Stake rate-limiting
-A full-slate scan does many board reads → exactly the `Failed to fetch` /
-throttling we hardened against. Design for it: reuse the board-read cache, respect
-`OCLAY_SGM_BOARD_THROTTLE_SECONDS`, scan incrementally, and let the menu populate
-progressively rather than hammering Stake up front. The retry/backoff already in
-`_fetch_sgm_board_in_browser` is the floor, not the whole answer.
+## 8. Scanning the full slate safely (batched)
+The bands are computed over the **whole slate**, but the scan runs in
+**rate-limit-safe batches**: read a group of games the throttle can handle, then
+the next group, until every game is read — letting the menu **populate
+progressively** as batches land rather than hammering Stake up front. Once the
+full board is in, the existing **elimination/scoring** runs (per-prop context →
+edge → market/line/game contests → realized-ROI kill-switch), then the frontier
+assembles the bands. Reuses the throttled `read_stake_sgm_boards_batch` + the
+board-read cache and respects `OCLAY_SGM_BOARD_THROTTLE_SECONDS`. The retry/backoff
+in `_fetch_sgm_board_in_browser` is the per-read floor; batching is the
+slate-level guard.
 
-## 9. The GPT's new role
-**Demote, don't necessarily delete.** The dashboard is the primary, reliable
-driver; the GPT becomes an *optional* English front-end for rare requests, off the
-critical path. OpenAI is never what you wait on day-to-day, but the escape hatch
-stays. Local NL (shorthand grammar, later a local model) can replace it entirely
-if desired.
+## 9. The GPT is removed
+The Custom GPT path is **fully removed** — no OpenAI in the loop at all. The TUI is
+the only driver. "Tell it what you want" is the local **type-a-target box** (e.g.
+`10k`), which is a trivial local magnitude parse, not a remote model. If richer
+free-form input is ever wanted it stays **local** (a shorthand grammar, or a small
+local model like Ollama) — never a cloud dependency. Removing the GPT also means
+the Custom-GPT action schema + instruction files stop being the product surface;
+they can be retired once the TUI covers their flows.
 
 ## 10. Guardrails / non-goals
 - **Merit first.** Variety, novelty, and contrarian bias are tiebreakers/search
@@ -176,23 +183,49 @@ if desired.
 6. **Dynamic layer** — live re-rank, progressive load, re-roll.
 7. **(Optional) local NL** — shorthand bar, then a local model if wanted.
 
-## 12. Decisions
+## 12. Decisions — settled
 
-**Locked:**
-- Dashboard form: **TUI** — extend the existing Textual `Oclay.bat` with a
-  decision/bands screen. CLI stays only as an optional scriptable companion.
-- Anti-hits: **no diversity dial, no override.** Variety is emergent from
-  edge-first ranking; novelty is display/tiebreaker only (§4).
+- **Dashboard form: TUI** — a decision/bands screen inside the existing Textual
+  app, launched by the single `Oclay.bat` at the repo root (see §13).
+- **GPT: fully removed.** No OpenAI anywhere; the local type-a-target box is the
+  only "tell it what you want" input (§9).
+- **Anti-hits: no dial, no override.** Variety emergent from edge-first ranking;
+  novelty display/tiebreaker only (§4).
+- **Scan scope: full slate, in rate-limit-safe batches** — read a group of games
+  the throttle can handle, continue until all are read, menu populates
+  progressively, then the existing elimination/scoring runs (§8).
+- **Band tiers: adaptive** to what the board actually reaches that night.
+- **TUI ↔ engine: via the localhost API** (the same validated build/log flow),
+  not in-process.
+- **Execution-ready gating (requirement):** a band is "buildable" only if its legs
+  have confirmed UI rowIds from the candidate pool; non-executable constructions
+  are flagged, never silently built.
+- **`Failed to fetch` recovery: wait** — the shipped retry/backoff is the first
+  line; add page-reload / Cloudflare re-clear only if failures persist in practice.
 
-**Still open (settle before Phase 1):**
-1. **GPT fate** — demote to optional (recommended) vs. fully remove.
-2. **Default scan scope** — all games vs. a chosen subset (rate-limit trade-off).
-3. **Band tiers** — fixed magnitudes (10x / 100x / 1k / 10k / 100k / max) vs.
-   adaptive to what the board actually reaches that night.
-4. **TUI ↔ engine wiring** — TUI calls the local API over localhost (same path the
-   GPT used) vs. imports the engine + job store in-process.
-5. **Execution-ready gating** — a band is "buildable" only if its legs have
-   confirmed UI rowIds (not feed props); confirm the menu builds from the UI
-   candidate pool and flags non-executable constructions.
-6. **`Failed to fetch` second-line recovery** — add page-reload + Cloudflare
-   re-clear before re-read now, or wait and see if the retry/backoff suffices.
+Nothing outstanding — Phase 1 (read-only slate-scan + band screen) is ready to
+start.
+
+## 13. Where the TUI lives (structure)
+One app, one launcher, navigable screens — the cleanest single-entry experience.
+
+```
+OCLAY/
+  Oclay.bat                 # single double-click entry (already exists), repo root
+  app/
+    local_helper_tui.py     # existing Textual app shell (ops: helper / clean)
+    decision_tui.py         # NEW: the bands / decision screen (Textual)
+    ... engine + API ...
+  docs/local-dashboard-design.md
+```
+
+- **Code:** the bands screen is a **new module under `app/`**, part of the
+  existing Textual app — not a separate program.
+- **Launch:** the **same `Oclay.bat`** at the repo root you already use. It opens
+  the TUI; a **"Bands"** menu entry goes to the decision screen. No new top-level
+  clutter — one mental model: "double-click Oclay, it's all in there." (An optional
+  `Oclay_Bands.bat` could jump straight to the screen, but isn't needed.)
+- **API:** `Oclay.bat` → `start-oclay-all.ps1` already starts the local API in the
+  background alongside the TUI, so the bands screen just calls
+  `http://127.0.0.1:8000` — no extra process to manage. (With the GPT removed, the
+  tunnel is no longer needed for the product, only the local API.)
