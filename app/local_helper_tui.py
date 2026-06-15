@@ -1362,7 +1362,7 @@ if TEXTUAL_AVAILABLE:
 
         def _clean_inline_thread(self, action: TuiAction) -> None:
             try:
-                code = self._run_module_command(["-m", "app.supabase_cache", "--root-dir", str(self.root_dir)])
+                code = self._run_module_command(["-m", "app.local_cleanup", "--root-dir", str(self.root_dir)])
                 self.cli.status = "ready" if code == 0 else "cleanup failed"
                 self._inline_message = "Cleanup complete." if code == 0 else "Cleanup failed."
             finally:
@@ -1479,7 +1479,7 @@ if TEXTUAL_AVAILABLE:
                 self.cli.start_helper("build")
             elif action.action_id == "clean":
                 self.cli.status = "cleaning cache"
-                code = self._run_module_command(["-m", "app.supabase_cache", "--root-dir", str(self.root_dir)])
+                code = self._run_module_command(["-m", "app.local_cleanup", "--root-dir", str(self.root_dir)])
                 self.cli.status = "ready" if code == 0 else "cleanup failed"
             elif action.action_id == "domain":
                 self.cli.toggle_stake_site()

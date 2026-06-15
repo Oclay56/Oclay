@@ -25,7 +25,7 @@ if not exist ".env" (
   if exist "env" (
     echo Found a file named "env". Rename it to ".env" if it contains your local settings.
   ) else (
-    echo Oclay needs local Supabase settings in %CD%\.env
+    echo Oclay needs local settings in %CD%\.env
     echo Use .env.example as the template, then fill in your local values.
   )
   echo.

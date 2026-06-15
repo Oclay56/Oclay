@@ -5,7 +5,9 @@ from pathlib import Path
 from typing import Any
 
 
-REQUIRED_ENV_KEYS = ("SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY")
+# No external-service credentials are required: the API and helper rendezvous
+# through a local SQLite job queue, so the helper runs with zero cloud setup.
+REQUIRED_ENV_KEYS: tuple[str, ...] = ()
 
 
 def check_local_helper_setup(root_dir: Path) -> dict[str, Any]:
@@ -30,10 +32,8 @@ def check_local_helper_setup(root_dir: Path) -> dict[str, Any]:
     ]
 
     warnings: list[str] = []
-    if not str(merged_env.get("AZP_LOCAL_UI_JOB_TABLE") or "").strip():
-        warnings.append("AZP_LOCAL_UI_JOB_TABLE is not set; defaulting to local_ui_jobs.")
-    if not str(merged_env.get("AZP_SUPABASE_AUTO_CLEANUP_MINUTES") or "").strip():
-        warnings.append("AZP_SUPABASE_AUTO_CLEANUP_MINUTES is not set; defaulting to 60.")
+    if not str(merged_env.get("OCLAY_AUTO_CLEANUP_MINUTES") or "").strip():
+        warnings.append("OCLAY_AUTO_CLEANUP_MINUTES is not set; defaulting to 60.")
 
     return {
         "ok": all(item["ok"] for item in checks),

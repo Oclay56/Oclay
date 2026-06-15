@@ -5,9 +5,9 @@ search MLB by name for every player on every run -- hundreds of sequential
 calls. This resolves each distinct name to its MLB id once and stores it on the
 ledger, so future validation skips the search entirely.
 
-It reads only from the free MLB Stats API and writes only to the local ledger;
-Supabase is never touched. Names that cannot be confidently matched are left
-id-less and reported, never guessed onto the wrong player.
+It reads only from the free MLB Stats API and writes only to the local ledger.
+Names that cannot be confidently matched are left id-less and reported, never
+guessed onto the wrong player.
 """
 
 from __future__ import annotations

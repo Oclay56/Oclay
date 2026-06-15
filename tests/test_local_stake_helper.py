@@ -441,30 +441,3 @@ def test_stake_bet_uses_separate_default_chrome_profile(monkeypatch):
     assert local_stake_helper._stake_chrome_profile_dir() == (
         Path("data") / "chrome-stake-ui-bet"
     )
-
-
-def test_supabase_cache_cleanup_sync_uses_env_settings(monkeypatch):
-    seen: dict[str, object] = {}
-
-    def fake_run_cleanup(**kwargs):
-        seen.update(kwargs)
-        return {
-            "expiredJobs": 2,
-            "deletedJobs": 3,
-        }
-
-    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
-    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "service-key")
-    monkeypatch.setenv("AZP_LOCAL_UI_JOB_TABLE", "local_ui_jobs")
-    monkeypatch.setenv("AZP_SUPABASE_JOB_RETENTION_HOURS", "4")
-    monkeypatch.setenv("AZP_SUPABASE_STALE_JOB_MINUTES", "9")
-    monkeypatch.setattr(local_stake_helper, "run_cleanup", fake_run_cleanup)
-
-    result = local_stake_helper._run_supabase_cache_cleanup_sync()
-
-    assert result == {"expiredJobs": 2, "deletedJobs": 3}
-    assert seen["supabase_url"] == "https://example.supabase.co"
-    assert seen["service_key"] == "service-key"
-    assert seen["table_name"] == "local_ui_jobs"
-    assert seen["retention_hours"] == 4
-    assert seen["stale_running_minutes"] == 9

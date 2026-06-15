@@ -4,10 +4,10 @@ Oclay is a simple AI-led MLB review-slip helper. The Custom GPT reads current St
 
 ## Schema URL
 
-Use the Render service schema URL after deployment:
+The API runs locally; use your tunnel domain (cloudflared / ngrok static domain):
 
 ```text
-https://<your-oclay-render-service>/gpt/openapi.json
+https://<your-tunnel-domain>/gpt/openapi.json
 ```
 
 ## Included Files

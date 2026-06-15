@@ -6,7 +6,7 @@ from datetime import date, datetime, timezone
 import pytest
 from fastapi.testclient import TestClient
 
-from app.local_ui_bridge import LocalUiBridgeTimeout, SupabaseLocalUiJobStore, _row_to_job
+from app.local_ui_bridge import LocalUiBridgeTimeout, LocalSqliteJobStore, _row_to_job
 from app.gpt_action import build_gpt_action_openapi_schema
 from app.main import (
     app,
@@ -651,27 +651,17 @@ def test_local_ui_bridge_row_to_job_clamps_completed_at_before_created_at():
     assert job["completedAt"] == job["createdAt"]
 
 
-def test_local_ui_bridge_finds_recent_completed_job_by_cache_key(monkeypatch):
-    async def fake_request(*args, **kwargs):
-        return [
-            {
-                "job_id": "job-sgm-board",
-                "job_type": "stake_ui_sgm_board",
-                "status": "completed",
-                "request_json": {"cacheKey": "sgm-board:fixture-a"},
-                "result_json": {"source": "stake_ui_sgm"},
-                "created_at": "2026-05-31T12:00:00+00:00",
-                "completed_at": "2026-05-31T12:00:01+00:00",
-                "updated_at": "2026-05-31T12:00:01+00:00",
-            }
-        ]
-
+def test_local_ui_bridge_finds_recent_completed_job_by_cache_key(tmp_path, monkeypatch):
     monkeypatch.setattr("app.local_ui_bridge.datetime", _FixedUtcNow)
-    store = SupabaseLocalUiJobStore(
-        supabase_url="https://example.supabase.co",
-        service_key="secret",
+    store = LocalSqliteJobStore(db_path=tmp_path / "jobs.sqlite")
+    job = asyncio.run(
+        store.create_job(
+            job_type="stake_ui_sgm_board",
+            request={"cacheKey": "sgm-board:fixture-a"},
+            timeout_seconds=30,
+        )
     )
-    monkeypatch.setattr(store, "_request", fake_request)
+    asyncio.run(store.complete_job(job["jobId"], {"source": "stake_ui_sgm"}))
 
     cached = asyncio.run(
         store.find_recent_completed_job(
@@ -681,7 +671,9 @@ def test_local_ui_bridge_finds_recent_completed_job_by_cache_key(monkeypatch):
         )
     )
 
+    assert cached is not None
     assert cached["jobType"] == "stake_ui_sgm_board"
+    assert cached["result"]["source"] == "stake_ui_sgm"
 
 
 def test_compact_sgm_board_returns_stable_row_ids_for_duplicate_odds():

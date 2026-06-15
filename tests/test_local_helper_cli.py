@@ -31,7 +31,7 @@ def test_main_menu_uses_oclay_branding_and_only_simple_commands():
         status="ready",
         mode="review-safe",
         browser="checking",
-        supabase="checking",
+        job_queue="checking",
         setup_report=_passing_setup_report(),
     )
 
@@ -79,7 +79,7 @@ def test_command_aliases_route_to_simple_actions(monkeypatch):
 def test_cleanup_returns_prompt_to_ready(monkeypatch, tmp_path):
     (tmp_path / ".venv" / "Scripts").mkdir(parents=True)
     (tmp_path / ".venv" / "Scripts" / "python.exe").write_text("", encoding="utf-8")
-    (tmp_path / ".env").write_text("SUPABASE_URL=x\nSUPABASE_SERVICE_ROLE_KEY=x\n", encoding="utf-8")
+    (tmp_path / ".env").write_text("OCLAY_AUTO_CLEANUP_MINUTES=60\n", encoding="utf-8")
 
     class Completed:
         returncode = 0

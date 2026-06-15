@@ -1,6 +1,6 @@
-# Starts the Oclay backend locally, loading .env first so the Supabase bridge
-# and other settings match what Render used. The local API reads the LOCAL
-# pick ledger (data/pick_ledger.sqlite) -- the one with your full history.
+# Starts the Oclay backend locally, loading .env first. Everything runs on this
+# machine -- a local SQLite job queue bridges to the Stake helper, and the LOCAL
+# pick ledger (data/pick_ledger.sqlite) holds your full history.
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
 $Host.UI.RawUI.WindowTitle = 'Oclay API (local)'

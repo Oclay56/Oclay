@@ -4,8 +4,6 @@ from app.local_helper_setup import check_local_helper_setup, format_setup_report
 
 
 def test_setup_check_reports_ready_when_required_local_bits_exist(tmp_path, monkeypatch):
-    monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
     chrome_path = tmp_path / "chrome.exe"
     chrome_path.write_text("", encoding="utf-8")
     python_exe = tmp_path / ".venv" / "Scripts" / "python.exe"
@@ -14,8 +12,7 @@ def test_setup_check_reports_ready_when_required_local_bits_exist(tmp_path, monk
     (tmp_path / ".env").write_text(
         "\n".join(
             [
-                "SUPABASE_URL=https://example.supabase.co",
-                "SUPABASE_SERVICE_ROLE_KEY=test-key",
+                "OCLAY_AUTO_CLEANUP_MINUTES=60",
                 f"AZP_CHROME_PATH={chrome_path}",
             ]
         ),
@@ -29,8 +26,6 @@ def test_setup_check_reports_ready_when_required_local_bits_exist(tmp_path, monk
 
 
 def test_setup_check_reports_missing_required_items(tmp_path, monkeypatch):
-    monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
     monkeypatch.delenv("AZP_CHROME_PATH", raising=False)
 
     report = check_local_helper_setup(tmp_path)

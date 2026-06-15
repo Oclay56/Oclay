@@ -22,7 +22,7 @@ from .local_ui_bridge import (
     LocalUiBridgeDisabled,
     LocalUiBridgeError,
     LocalUiBridgeTimeout,
-    SupabaseLocalUiJobStore,
+    LocalSqliteJobStore,
 )
 from .gpt_action import (
     build_available_markets,
@@ -64,10 +64,6 @@ from .stake_client import StakeAPIError, StakeClient, build_http_client
 from .stake_odds_fill import fill_missing_leg_odds
 from .stake_sgm_browser import make_sgm_selection_row_id, sgm_market_filter_matches
 from .storage import GptActionStore
-from .supabase_ledger import (
-    supabase_ledger_enabled,
-    sync_market_mappings_to_supabase,
-)
 
 
 app = FastAPI(
@@ -94,8 +90,8 @@ def get_gpt_store() -> GptActionStore:
     return GptActionStore()
 
 
-def get_local_ui_job_store() -> SupabaseLocalUiJobStore:
-    return SupabaseLocalUiJobStore()
+def get_local_ui_job_store() -> LocalSqliteJobStore:
+    return LocalSqliteJobStore()
 
 
 def get_pick_ledger() -> PickLedger:
@@ -128,7 +124,7 @@ async def gpt_privacy_policy() -> dict[str, Any]:
         ),
         "dataUse": [
             "Requests may include matchup names, player ids, prop ids, dates, markets, and GPT-selected props.",
-            "Supabase is used for local UI jobs and market mappings needed to review and build slips.",
+            "A local SQLite queue carries UI jobs and market mappings needed to review and build slips; nothing is sent to a third-party backend.",
             "No Stake account login, wallet, password, or bet-placement action is supported.",
         ],
     }
@@ -142,10 +138,9 @@ async def gpt_openapi_schema(request: Request) -> Any:
 def _public_base_url(request: Request) -> str:
     """The URL the GPT should call, baked into the schema's servers field.
 
-    Prefer an explicitly configured public address (the ngrok static domain or
-    OCLAY_PUBLIC_URL) so the schema is correct regardless of how a tunnel
-    forwards Host/proto headers. Falls back to the request's own base URL
-    (e.g. on Render, where the host is already the public one).
+    Prefer an explicitly configured public address (the ngrok/cloudflared static
+    domain or OCLAY_PUBLIC_URL) so the schema is correct regardless of how the
+    tunnel forwards Host/proto headers. Falls back to the request's own base URL.
     """
     domain = os.getenv("OCLAY_NGROK_DOMAIN", "").strip()
     if domain:
@@ -372,7 +367,7 @@ async def mlb_build_slip_candidates(
 @app.post("/mlb/stake-ui/mlb-games")
 async def mlb_stake_ui_mlb_games(
     payload: dict[str, Any] = Body(default_factory=dict),
-    job_store: SupabaseLocalUiJobStore = Depends(get_local_ui_job_store),
+    job_store: LocalSqliteJobStore = Depends(get_local_ui_job_store),
 ) -> Any:
     if not job_store.enabled():
         raise HTTPException(
@@ -380,8 +375,9 @@ async def mlb_stake_ui_mlb_games(
             detail={
                 "source": "local_ui_bridge",
                 "message": (
-                    "Supabase local UI bridge is not configured. Set SUPABASE_URL "
-                    "and SUPABASE_SERVICE_ROLE_KEY on Render and the local helper."
+                    "Local UI job queue is unavailable (could not open the local "
+                    "SQLite store). Make sure the Stake helper is running and the "
+                    "data directory is writable."
                 ),
             },
         )
@@ -469,7 +465,7 @@ async def mlb_stake_ui_mlb_games(
 @app.post("/mlb/stake-ui/state")
 async def mlb_stake_ui_state(
     payload: dict[str, Any] = Body(default_factory=dict),
-    job_store: SupabaseLocalUiJobStore = Depends(get_local_ui_job_store),
+    job_store: LocalSqliteJobStore = Depends(get_local_ui_job_store),
 ) -> Any:
     if not job_store.enabled():
         raise HTTPException(
@@ -477,8 +473,9 @@ async def mlb_stake_ui_state(
             detail={
                 "source": "local_ui_bridge",
                 "message": (
-                    "Supabase local UI bridge is not configured. Set SUPABASE_URL "
-                    "and SUPABASE_SERVICE_ROLE_KEY on Render and the local helper."
+                    "Local UI job queue is unavailable (could not open the local "
+                    "SQLite store). Make sure the Stake helper is running and the "
+                    "data directory is writable."
                 ),
             },
         )
@@ -553,7 +550,7 @@ async def mlb_stake_ui_state(
 @app.post("/mlb/stake-ui/clear-sgm-selections")
 async def mlb_stake_ui_clear_sgm_selections(
     payload: dict[str, Any] = Body(default_factory=dict),
-    job_store: SupabaseLocalUiJobStore = Depends(get_local_ui_job_store),
+    job_store: LocalSqliteJobStore = Depends(get_local_ui_job_store),
 ) -> Any:
     if not job_store.enabled():
         raise HTTPException(
@@ -561,8 +558,9 @@ async def mlb_stake_ui_clear_sgm_selections(
             detail={
                 "source": "local_ui_bridge",
                 "message": (
-                    "Supabase local UI bridge is not configured. Set SUPABASE_URL "
-                    "and SUPABASE_SERVICE_ROLE_KEY on Render and the local helper."
+                    "Local UI job queue is unavailable (could not open the local "
+                    "SQLite store). Make sure the Stake helper is running and the "
+                    "data directory is writable."
                 ),
             },
         )
@@ -635,7 +633,7 @@ async def mlb_stake_ui_clear_sgm_selections(
 async def mlb_stake_ui_remove_sidebar_group(
     payload: dict[str, Any] = Body(...),
     client: StakeClient = Depends(get_stake_client),
-    job_store: SupabaseLocalUiJobStore = Depends(get_local_ui_job_store),
+    job_store: LocalSqliteJobStore = Depends(get_local_ui_job_store),
 ) -> Any:
     if not job_store.enabled():
         raise HTTPException(
@@ -643,8 +641,9 @@ async def mlb_stake_ui_remove_sidebar_group(
             detail={
                 "source": "local_ui_bridge",
                 "message": (
-                    "Supabase local UI bridge is not configured. Set SUPABASE_URL "
-                    "and SUPABASE_SERVICE_ROLE_KEY on Render and the local helper."
+                    "Local UI job queue is unavailable (could not open the local "
+                    "SQLite store). Make sure the Stake helper is running and the "
+                    "data directory is writable."
                 ),
             },
         )
@@ -762,7 +761,7 @@ async def mlb_stake_ui_remove_sidebar_group(
 @app.post("/mlb/stake-ui/clear-sidebar")
 async def mlb_stake_ui_clear_sidebar(
     payload: dict[str, Any] = Body(default_factory=dict),
-    job_store: SupabaseLocalUiJobStore = Depends(get_local_ui_job_store),
+    job_store: LocalSqliteJobStore = Depends(get_local_ui_job_store),
 ) -> Any:
     if not job_store.enabled():
         raise HTTPException(
@@ -770,8 +769,9 @@ async def mlb_stake_ui_clear_sidebar(
             detail={
                 "source": "local_ui_bridge",
                 "message": (
-                    "Supabase local UI bridge is not configured. Set SUPABASE_URL "
-                    "and SUPABASE_SERVICE_ROLE_KEY on Render and the local helper."
+                    "Local UI job queue is unavailable (could not open the local "
+                    "SQLite store). Make sure the Stake helper is running and the "
+                    "data directory is writable."
                 ),
             },
         )
@@ -852,7 +852,7 @@ async def mlb_stake_ui_clear_sidebar(
 async def mlb_stake_ui_sgm_board(
     payload: dict[str, Any] = Body(...),
     client: StakeClient = Depends(get_stake_client),
-    job_store: SupabaseLocalUiJobStore = Depends(get_local_ui_job_store),
+    job_store: LocalSqliteJobStore = Depends(get_local_ui_job_store),
 ) -> Any:
     if not job_store.enabled():
         raise HTTPException(
@@ -860,8 +860,9 @@ async def mlb_stake_ui_sgm_board(
             detail={
                 "source": "local_ui_bridge",
                 "message": (
-                    "Supabase local UI bridge is not configured. Set SUPABASE_URL "
-                    "and SUPABASE_SERVICE_ROLE_KEY on Render and the local helper."
+                    "Local UI job queue is unavailable (could not open the local "
+                    "SQLite store). Make sure the Stake helper is running and the "
+                    "data directory is writable."
                 ),
             },
         )
@@ -986,7 +987,7 @@ async def mlb_stake_ui_sgm_candidate_pool(
     payload: dict[str, Any] = Body(default_factory=dict),
     client: StakeClient = Depends(get_stake_client),
     engine: MLBDataEngine = Depends(get_mlb_engine),
-    job_store: SupabaseLocalUiJobStore = Depends(get_local_ui_job_store),
+    job_store: LocalSqliteJobStore = Depends(get_local_ui_job_store),
 ) -> Any:
     if not job_store.enabled():
         raise HTTPException(
@@ -994,8 +995,9 @@ async def mlb_stake_ui_sgm_candidate_pool(
             detail={
                 "source": "local_ui_bridge",
                 "message": (
-                    "Supabase local UI bridge is not configured. Set SUPABASE_URL "
-                    "and SUPABASE_SERVICE_ROLE_KEY on Render and the local helper."
+                    "Local UI job queue is unavailable (could not open the local "
+                    "SQLite store). Make sure the Stake helper is running and the "
+                    "data directory is writable."
                 ),
             },
         )
@@ -1181,7 +1183,7 @@ async def mlb_stake_ui_sgm_candidate_pool(
 async def mlb_stake_ui_review_slip(
     payload: dict[str, Any] = Body(...),
     client: StakeClient = Depends(get_stake_client),
-    job_store: SupabaseLocalUiJobStore = Depends(get_local_ui_job_store),
+    job_store: LocalSqliteJobStore = Depends(get_local_ui_job_store),
 ) -> Any:
     if not job_store.enabled():
         raise HTTPException(
@@ -1189,8 +1191,9 @@ async def mlb_stake_ui_review_slip(
             detail={
                 "source": "local_ui_bridge",
                 "message": (
-                    "Supabase local UI bridge is not configured. Set SUPABASE_URL "
-                    "and SUPABASE_SERVICE_ROLE_KEY on Render and the local helper."
+                    "Local UI job queue is unavailable (could not open the local "
+                    "SQLite store). Make sure the Stake helper is running and the "
+                    "data directory is writable."
                 ),
             },
         )
@@ -1346,7 +1349,7 @@ async def mlb_stake_ui_review_slip(
 async def mlb_stake_ui_review_slip_batch(
     payload: dict[str, Any] = Body(...),
     client: StakeClient = Depends(get_stake_client),
-    job_store: SupabaseLocalUiJobStore = Depends(get_local_ui_job_store),
+    job_store: LocalSqliteJobStore = Depends(get_local_ui_job_store),
 ) -> Any:
     if not job_store.enabled():
         raise HTTPException(
@@ -1354,8 +1357,9 @@ async def mlb_stake_ui_review_slip_batch(
             detail={
                 "source": "local_ui_bridge",
                 "message": (
-                    "Supabase local UI bridge is not configured. Set SUPABASE_URL "
-                    "and SUPABASE_SERVICE_ROLE_KEY on Render and the local helper."
+                    "Local UI job queue is unavailable (could not open the local "
+                    "SQLite store). Make sure the Stake helper is running and the "
+                    "data directory is writable."
                 ),
             },
         )
@@ -1513,17 +1517,6 @@ async def mlb_matchup_market_map(
     response["marketMappingStore"] = {
         "localSaved": saved["marketMappingsSaved"],
     }
-    if supabase_ledger_enabled() and response.get("marketMap"):
-        try:
-            supabase_result = await sync_market_mappings_to_supabase(
-                response["marketMap"]
-            )
-            response["marketMappingStore"]["supabaseSynced"] = bool(
-                supabase_result.get("synced")
-            )
-        except Exception as exc:
-            response["marketMappingStore"]["supabaseSynced"] = False
-            response["marketMappingStore"]["supabaseWarning"] = str(exc)
     return response
 
 
@@ -2752,7 +2745,7 @@ async def _resolve_stake_fixture_slug(
 
 async def _stake_ui_fixture_slugs_from_index(
     *,
-    job_store: SupabaseLocalUiJobStore,
+    job_store: LocalSqliteJobStore,
     timeout_seconds: int,
     max_games: int,
 ) -> list[str]:

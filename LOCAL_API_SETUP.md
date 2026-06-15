@@ -1,15 +1,14 @@
 # Run Oclay all-local (GPT logs into the same ledger you train on)
 
-By default the Custom GPT talked to a Render backend with its own ephemeral
-ledger — separate from your local history, and wiped on every redeploy. This
-points the GPT at your **local** backend instead, so everything (logging,
+Oclay runs entirely on this machine — no Render backend, no Supabase. The Custom
+GPT points at your **local** API through a tunnel, so everything (logging,
 grading, calibration, your imported history) lives in one durable place:
 `data/pick_ledger.sqlite`.
 
 ```
 Custom GPT  ->  Cloudflare tunnel  ->  local API (127.0.0.1:8000)  ->  local ledger
                                                   |
-                                                  +->  Supabase job queue  ->  local helper (scraping)
+                                                  +->  local SQLite job queue  ->  local helper (scraping)
 ```
 
 ## One-time setup
@@ -63,8 +62,10 @@ tunnel.)
   `SHOW_BACKGROUND_TERMINALS=true` to see the **Oclay Tunnel** window, or just run
   `Oclay_API.bat`, to copy the temporary URL.
 
-## Render
+## No external services
 
-Once the GPT points at the tunnel, it never calls Render again — repointing *is*
-the cutover. You can suspend or delete the Render service in the Render dashboard
-to be certain and to stop it consuming free hours. Nothing local depends on it.
+Nothing in Oclay depends on a hosted backend. The API, the SQLite job queue, the
+Stake helper, and the learning ledger all run on this machine; the only outbound
+calls are to Stake and the free MLB Stats API. The tunnel is just the doorway the
+GPT uses to reach your local API — there is no Render service and no Supabase
+project to manage, suspend, or pay for.

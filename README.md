@@ -80,10 +80,11 @@ The TUI exposes only:
 
 ## API Schema
 
-After deployment, import this schema into the Custom GPT action:
+The API runs locally; expose it to the Custom GPT through a tunnel (cloudflared
+or an ngrok static domain) and import this schema into the action:
 
 ```text
-https://<your-oclay-render-service>/gpt/openapi.json
+https://<your-tunnel-domain>/gpt/openapi.json
 ```
 
 ## Guardrails
@@ -96,11 +97,12 @@ https://<your-oclay-render-service>/gpt/openapi.json
 - Compare all available player markets on merit before selecting a row.
 - Estimated probabilities and expected values are modeled support data, not a final Stake SGM quote; the Custom GPT owns the final selection.
 
-## Supabase
+## Fully local — no external services
 
-The Oclay schema keeps:
+OCLAY runs entirely on your machine. There is no Render deploy and no Supabase
+project; the only outbound calls are to Stake and the free MLB Stats API.
 
-- `market_mappings`
-- `local_ui_jobs`
-
-Apply `supabase/gpt_action.sql` to the Oclay Supabase project before using the local helper bridge. The pick ledger is local SQLite by default; point `OCLAY_LEDGER_PATH` at a persistent volume on Render to retain learning history across deploys.
+- **API ↔ helper bridge** — the FastAPI API and the Stake Chrome helper rendezvous through a local WAL-mode SQLite queue (`data/local_ui_jobs.sqlite`, [app/local_ui_bridge.py](app/local_ui_bridge.py)). Finished job rows are auto-pruned, so it stays tiny.
+- **Learning history** — the pick ledger is local SQLite (`OCLAY_LEDGER_PATH`, defaults under `data/`). Market mappings are stored locally too.
+- **Reaching the GPT** — a tunnel (cloudflared / ngrok static domain) forwards the Custom GPT to the local API; repointing the action URL is the whole setup.
+- **Storage** — everything is SQLite + rebuildable Chrome caches. `python -m app.local_cleanup` (or `local_cleanup.bat`) prunes the job queue and Chrome caches; the helper also runs it on `OCLAY_AUTO_CLEANUP_MINUTES`.

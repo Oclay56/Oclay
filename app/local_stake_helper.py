@@ -19,7 +19,7 @@ from .local_ui_bridge import (
     STAKE_SGM_BUILD_SLIP_BATCH_JOB_TYPE,
     STAKE_SGM_BUILD_SLIP_JOB_TYPE,
     STAKE_UI_STATE_JOB_TYPE,
-    SupabaseLocalUiJobStore,
+    LocalSqliteJobStore,
 )
 from .stake_sgm_browser import (
     DEFAULT_CDP_URL,
@@ -33,12 +33,7 @@ from .stake_sgm_browser import (
     read_stake_ui_state,
     remove_stake_sidebar_group,
 )
-from .supabase_cache import (
-    DEFAULT_JOB_RETENTION_HOURS,
-    DEFAULT_LOCAL_UI_JOB_TABLE,
-    DEFAULT_STALE_RUNNING_MINUTES,
-    run_cleanup,
-)
+from .local_cleanup import cleanup_local_cache
 
 
 DEFAULT_CHROME_USER_DATA_DIR = Path("data") / "chrome-stake-ui"
@@ -70,11 +65,11 @@ async def run_helper(
         os.environ["AZP_STAKE_START_URL"] = _clean_stake_start_url(stake_start_url, resolved_base_url)
     if chrome_profile:
         os.environ["AZP_STAKE_CHROME_PROFILE"] = str(chrome_profile)
-    store = SupabaseLocalUiJobStore()
+    store = LocalSqliteJobStore()
     if not store.enabled():
         raise RuntimeError(
-            "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required before starting "
-            "the local AZP helper."
+            "Could not open the local UI-job queue (SQLite). Make sure the data "
+            "directory is writable before starting the local Stake helper."
         )
 
     if autostart_chrome:
@@ -94,13 +89,13 @@ async def run_helper(
     cleanup_interval_seconds = max(auto_cleanup_minutes, 0.0) * 60
     next_cleanup_at = 0.0
     if cleanup_interval_seconds:
-        await _run_supabase_cache_cleanup("startup")
+        await _run_local_cleanup("startup", store)
         next_cleanup_at = time.monotonic() + cleanup_interval_seconds
 
     while True:
         try:
             if cleanup_interval_seconds and time.monotonic() >= next_cleanup_at:
-                await _run_supabase_cache_cleanup("scheduled")
+                await _run_local_cleanup("scheduled", store)
                 next_cleanup_at = time.monotonic() + cleanup_interval_seconds
 
             job = None
@@ -125,7 +120,7 @@ async def run_helper(
 
 
 async def process_job(
-    store: SupabaseLocalUiJobStore,
+    store: LocalSqliteJobStore,
     job: dict[str, Any],
     *,
     cdp_url: str = DEFAULT_CDP_URL,
@@ -226,7 +221,7 @@ async def process_job(
 
 
 async def _safe_complete_job(
-    store: SupabaseLocalUiJobStore,
+    store: LocalSqliteJobStore,
     job_id: str,
     result: dict[str, Any],
 ) -> bool:
@@ -239,7 +234,7 @@ async def _safe_complete_job(
 
 
 async def _safe_fail_job(
-    store: SupabaseLocalUiJobStore,
+    store: LocalSqliteJobStore,
     job_id: str,
     error_message: str,
 ) -> None:
@@ -356,35 +351,17 @@ def _stake_chrome_profile_dir() -> Path:
     return DEFAULT_CHROME_USER_DATA_DIR
 
 
-async def _run_supabase_cache_cleanup(reason: str) -> None:
+async def _run_local_cleanup(reason: str, store: LocalSqliteJobStore) -> None:
     try:
-        result = await asyncio.to_thread(_run_supabase_cache_cleanup_sync)
+        jobs = await store.prune()
+        cache = await asyncio.to_thread(cleanup_local_cache, root_dir=Path.cwd())
     except Exception as exc:
-        print(f"[{time.strftime('%H:%M:%S')}] Supabase cleanup skipped ({reason}): {exc}")
+        print(f"[{time.strftime('%H:%M:%S')}] Local cleanup skipped ({reason}): {exc}")
         return
     print(
-        f"[{time.strftime('%H:%M:%S')}] Supabase cleanup ({reason}): "
-        f"expired {result['expiredJobs']}, deleted {result['deletedJobs']}"
-    )
-
-
-def _run_supabase_cache_cleanup_sync() -> dict[str, Any]:
-    supabase_url = os.getenv("SUPABASE_URL")
-    service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_SERVICE_KEY")
-    if not supabase_url or not service_key:
-        raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required.")
-    return run_cleanup(
-        supabase_url=supabase_url,
-        service_key=service_key,
-        table_name=os.getenv("AZP_LOCAL_UI_JOB_TABLE", DEFAULT_LOCAL_UI_JOB_TABLE),
-        retention_hours=_env_float(
-            "AZP_SUPABASE_JOB_RETENTION_HOURS",
-            DEFAULT_JOB_RETENTION_HOURS,
-        ),
-        stale_running_minutes=_env_float(
-            "AZP_SUPABASE_STALE_JOB_MINUTES",
-            DEFAULT_STALE_RUNNING_MINUTES,
-        ),
+        f"[{time.strftime('%H:%M:%S')}] Local cleanup ({reason}): "
+        f"pruned {jobs.get('prunedJobs', 0)} jobs, freed "
+        f"{cache.get('bytesFreed', 0)} bytes of Chrome cache."
     )
 
 
@@ -523,8 +500,8 @@ def main() -> int:
     parser.add_argument(
         "--auto-cleanup-minutes",
         type=float,
-        default=_env_float("AZP_SUPABASE_AUTO_CLEANUP_MINUTES", DEFAULT_AUTO_CLEANUP_MINUTES),
-        help="Run Supabase local UI job cleanup on this interval while the helper is open.",
+        default=_env_float("OCLAY_AUTO_CLEANUP_MINUTES", DEFAULT_AUTO_CLEANUP_MINUTES),
+        help="Run local job-queue + Chrome-cache cleanup on this interval while the helper is open.",
     )
     parser.add_argument(
         "--mode",

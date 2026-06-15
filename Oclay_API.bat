@@ -13,7 +13,7 @@ if not exist ".venv\Scripts\python.exe" (
 
 if not exist ".env" (
   echo ERROR: Could not find .env
-  echo Oclay needs local Supabase settings in %CD%\.env
+  echo Oclay needs local settings in %CD%\.env
   echo.
   pause
   exit /b 1

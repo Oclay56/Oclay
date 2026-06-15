@@ -280,10 +280,6 @@ def _rich_status(text: str, role: str) -> str:
 
 
 def _setup_check_label(name: str) -> str:
-    if name == "SUPABASE_URL configured":
-        return "SUPABASE_URL"
-    if name == "SUPABASE_SERVICE_ROLE_KEY configured":
-        return "SERVICE_ROLE_KEY"
     return name
 
 
@@ -373,20 +369,17 @@ def _browser_status(setup_report: dict[str, Any] | None, fallback: str) -> tuple
     return (fallback, "info")
 
 
-def _supabase_status(setup_report: dict[str, Any] | None, fallback: str) -> tuple[str, str]:
-    checks = {
-        str(item.get("name") or ""): bool(item.get("ok"))
-        for item in (setup_report or {}).get("checks") or []
-    }
-    if not checks:
+def _job_queue_status(setup_report: dict[str, Any] | None, fallback: str) -> tuple[str, str]:
+    # The job queue is a local SQLite file shared by the API and the helper, so
+    # it is available whenever the workspace is writable -- no external service.
+    try:
+        from .local_ui_bridge import LocalSqliteJobStore
+
+        if LocalSqliteJobStore().enabled():
+            return ("Local SQLite", "ok")
+        return ("unwritable data dir", "fail")
+    except Exception:
         return (fallback, "info")
-    required = (
-        checks.get("SUPABASE_URL configured"),
-        checks.get("SUPABASE_SERVICE_ROLE_KEY configured"),
-    )
-    if all(required):
-        return ("Connected", "ok")
-    return ("missing credentials", "fail")
 
 
 def _python_status(setup_report: dict[str, Any] | None) -> tuple[str, str]:
@@ -398,7 +391,7 @@ def _python_status(setup_report: dict[str, Any] | None) -> tuple[str, str]:
 
 def _cleanup_status(setup_report: dict[str, Any] | None) -> tuple[str, str]:
     warnings = [str(warning) for warning in (setup_report or {}).get("warnings") or []]
-    if any("AZP_SUPABASE_AUTO_CLEANUP_MINUTES" in warning for warning in warnings):
+    if any("OCLAY_AUTO_CLEANUP_MINUTES" in warning for warning in warnings):
         return ("Using default: 60 minutes", "warn")
     return ("Configured", "ok")
 
@@ -406,19 +399,12 @@ def _cleanup_status(setup_report: dict[str, Any] | None) -> tuple[str, str]:
 def _warning_detail_lines(warning: str, *, use_color: bool = False) -> list[str]:
     text = str(warning or "").strip()
     mark = _mark("WARN", "warn", use_color=use_color)
-    if "AZP_SUPABASE_AUTO_CLEANUP_MINUTES" in text:
+    if "OCLAY_AUTO_CLEANUP_MINUTES" in text:
         return [
-            f"{mark} AZP_SUPABASE_AUTO_CLEANUP_MINUTES is not set.",
+            f"{mark} OCLAY_AUTO_CLEANUP_MINUTES is not set.",
             "       Impact: not dangerous; using default cleanup timing.",
             "       Using default: 60 minutes.",
-            "       To customize, add AZP_SUPABASE_AUTO_CLEANUP_MINUTES=60 to .env.",
-        ]
-    if "AZP_LOCAL_UI_JOB_TABLE" in text:
-        return [
-            f"{mark} AZP_LOCAL_UI_JOB_TABLE is not set.",
-            "       Impact: not dangerous; using the default Supabase job table.",
-            "       Using default: local_ui_jobs.",
-            "       To customize, add AZP_LOCAL_UI_JOB_TABLE=local_ui_jobs to .env.",
+            "       To customize, add OCLAY_AUTO_CLEANUP_MINUTES=60 to .env.",
         ]
     if text:
         return [
@@ -461,7 +447,7 @@ def format_main_menu(
     status: str,
     mode: str,
     browser: str,
-    supabase: str,
+    job_queue: str,
     setup_report: dict[str, Any] | None = None,
     root_dir: Path = ROOT_DIR,
     log_path: Path | None = None,
@@ -473,7 +459,7 @@ def format_main_menu(
     use_color: bool = False,
 ) -> str:
     browser_label, browser_role = _browser_status(setup_report, browser)
-    supabase_label, supabase_role = _supabase_status(setup_report, supabase)
+    job_queue_label, job_queue_role = _job_queue_status(setup_report, job_queue)
     python_label, python_role = _python_status(setup_report)
     cleanup_label, cleanup_role = _cleanup_status(setup_report)
     lines = [
@@ -485,7 +471,7 @@ def format_main_menu(
         "",
         "System:",
         f"  {_mark('OK' if browser_role == 'ok' else 'FAIL', browser_role, use_color=use_color)} Browser      {browser_label}",
-        f"  {_mark('OK' if supabase_role == 'ok' else 'FAIL', supabase_role, use_color=use_color)} Supabase     {supabase_label}",
+        f"  {_mark('OK' if job_queue_role == 'ok' else 'FAIL', job_queue_role, use_color=use_color)} Job queue    {job_queue_label}",
         f"  {_mark('OK' if python_role == 'ok' else 'FAIL', python_role, use_color=use_color)} Python       {python_label}",
         f"  {_mark('WARN' if cleanup_role == 'warn' else 'OK', cleanup_role, use_color=use_color)} Cleanup      {cleanup_label}",
         "",
@@ -512,7 +498,7 @@ def format_status_screen(
     status: str,
     mode: str,
     browser: str,
-    supabase: str,
+    job_queue: str,
     setup_report: dict[str, Any] | None = None,
     root_dir: Path = ROOT_DIR,
     log_path: Path | None = None,
@@ -527,7 +513,7 @@ def format_status_screen(
         status=status,
         mode=mode,
         browser=browser,
-        supabase=supabase,
+        job_queue=job_queue,
         setup_report=setup_report,
         root_dir=root_dir,
         log_path=log_path,
@@ -615,7 +601,7 @@ def format_doctor_screen(report: dict[str, Any], *, use_color: bool = False) -> 
             "",
             "Notes:",
             "- Doctor checks local prerequisites and write access.",
-            "- Supabase table/network checks happen when helper jobs or cleanup run.",
+            "- The local SQLite job queue is created on demand when helper jobs run.",
         ]
     )
     return "\n".join(lines)
@@ -687,7 +673,7 @@ class OclayCli:
         self.status = "ready"
         self.mode = "review-safe"
         self.browser = "checking"
-        self.supabase = "checking"
+        self.job_queue = "checking"
         self.last_scan = "none"
         self.last_build = "none"
         self.last_helper_exit = "none"
@@ -724,7 +710,7 @@ class OclayCli:
                 status=self.status,
                 mode=self.mode,
                 browser=self.browser,
-                supabase=self.supabase,
+                job_queue=self.job_queue,
                 setup_report=setup_report,
                 root_dir=self.root_dir,
                 log_path=self.log_path,
@@ -826,7 +812,7 @@ class OclayCli:
                 status=self.status,
                 mode=self.mode,
                 browser=self.browser,
-                supabase=self.supabase,
+                job_queue=self.job_queue,
                 setup_report=setup_report,
                 root_dir=self.root_dir,
                 log_path=self.log_path,
@@ -838,7 +824,7 @@ class OclayCli:
             )
 
         browser_label, browser_role = _browser_status(setup_report, self.browser)
-        supabase_label, supabase_role = _supabase_status(setup_report, self.supabase)
+        job_queue_label, job_queue_role = _job_queue_status(setup_report, self.job_queue)
         python_label, python_role = _python_status(setup_report)
         cleanup_label, cleanup_role = _cleanup_status(setup_report)
 
@@ -868,7 +854,7 @@ class OclayCli:
         line()
         line("System:", "bold")
         status_line("Browser", browser_label, browser_role)
-        status_line("Supabase", supabase_label, supabase_role)
+        status_line("Job queue", job_queue_label, job_queue_role)
         status_line("Python", python_label, python_role)
         status_line("Cleanup", cleanup_label, cleanup_role)
         line()
@@ -1059,7 +1045,7 @@ class OclayCli:
                 status=self.status,
                 mode=self.mode,
                 browser=self.browser,
-                supabase=self.supabase,
+                job_queue=self.job_queue,
                 setup_report=report,
                 root_dir=self.root_dir,
                 log_path=self.log_path,
@@ -1087,7 +1073,7 @@ class OclayCli:
 
         if not assume_yes:
             self.emit(
-                "This will delete old Supabase local-helper job rows and rebuildable local cache files.\n"
+                "This will prune the local job queue and delete rebuildable local cache files.\n"
                 "It keeps Chrome login/session data and never places or cancels bets.\n",
                 role="warn",
             )
@@ -1099,9 +1085,9 @@ class OclayCli:
                 return
 
         self.status = "cleaning cache"
-        self.emit("Running Supabase and local cache cleanup...\n", role="info")
+        self.emit("Running local job-queue and cache cleanup...\n", role="info")
         completed = subprocess.run(
-            [str(python_exe), "-m", "app.supabase_cache", "--root-dir", str(self.root_dir)],
+            [str(python_exe), "-m", "app.local_cleanup", "--root-dir", str(self.root_dir)],
             cwd=self.root_dir,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
