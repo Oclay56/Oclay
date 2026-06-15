@@ -47,7 +47,7 @@ DEFAULT_AUTO_CLEANUP_MINUTES = 60.0
 async def run_helper(
     *,
     cdp_url: str = DEFAULT_CDP_URL,
-    poll_seconds: float = 2.0,
+    poll_seconds: float = 1.0,
     worker_id: str | None = None,
     autostart_chrome: bool = True,
     mode: str = "review",
@@ -478,7 +478,7 @@ def main() -> int:
     _load_dotenv()
     parser = argparse.ArgumentParser(description="Run the AZP local Stake UI helper.")
     parser.add_argument("--cdp-url", default=DEFAULT_CDP_URL)
-    parser.add_argument("--poll-seconds", type=float, default=2.0)
+    parser.add_argument("--poll-seconds", type=float, default=1.0)
     parser.add_argument("--worker-id")
     parser.add_argument("--no-autostart-chrome", action="store_true")
     parser.add_argument(

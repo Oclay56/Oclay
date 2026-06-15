@@ -1034,3 +1034,48 @@ def test_batch_should_continue_after_failed_group_when_partial_mode_enabled():
         {"status": "built_for_review"},
         continue_on_group_failure=False,
     )
+
+
+class _FakeSgmPage:
+    """Minimal page stub: each evaluate() call consumes the next scripted behavior
+    (an Exception to raise, or a dict to return)."""
+
+    def __init__(self, behaviors):
+        self._behaviors = list(behaviors)
+        self.evaluate_calls = 0
+        self.waits_ms: list[int] = []
+
+    def evaluate(self, *args, **kwargs):
+        behavior = self._behaviors[self.evaluate_calls]
+        self.evaluate_calls += 1
+        if isinstance(behavior, Exception):
+            raise behavior
+        return behavior
+
+    def wait_for_timeout(self, ms):
+        self.waits_ms.append(ms)
+
+
+_OK_BOARD = {"status": 200, "text": '{"data": {"sgm": "ok"}}'}
+
+
+def test_sgm_fetch_retries_transient_failed_to_fetch():
+    page = _FakeSgmPage([Exception("Page.evaluate: TypeError: Failed to fetch"), _OK_BOARD])
+    data = sgm_browser._fetch_sgm_board_in_browser(page, "fixture-x")
+    assert data == {"data": {"sgm": "ok"}}
+    assert page.evaluate_calls == 2  # retried once, then succeeded
+    assert page.waits_ms  # backed off before the retry
+
+
+def test_sgm_fetch_does_not_retry_non_transient_error():
+    page = _FakeSgmPage([Exception("some unrelated selector error"), _OK_BOARD])
+    with pytest.raises(Exception, match="unrelated selector error"):
+        sgm_browser._fetch_sgm_board_in_browser(page, "fixture-x")
+    assert page.evaluate_calls == 1  # raised immediately, no retry
+
+
+def test_sgm_fetch_raises_clear_error_after_exhausting_retries():
+    page = _FakeSgmPage([Exception("Failed to fetch")] * sgm_browser._SGM_FETCH_MAX_ATTEMPTS)
+    with pytest.raises(RuntimeError, match="kept failing"):
+        sgm_browser._fetch_sgm_board_in_browser(page, "fixture-x")
+    assert page.evaluate_calls == sgm_browser._SGM_FETCH_MAX_ATTEMPTS

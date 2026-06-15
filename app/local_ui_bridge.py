@@ -55,7 +55,14 @@ class LocalUiBridgeTimeout(LocalUiBridgeError):
 
 
 def _default_db_path() -> str:
-    return os.getenv("OCLAY_LOCAL_UI_JOB_DB", "data/local_ui_jobs.sqlite")
+    env = os.getenv("OCLAY_LOCAL_UI_JOB_DB", "").strip()
+    if env:
+        return env
+    # Anchor to <repo_root>/data so the API and the Stake helper always share the
+    # SAME queue file regardless of each process's current working directory. A
+    # relative path here is a footgun: started from different cwds, the two
+    # processes would silently use different files and never see each other's jobs.
+    return str(Path(__file__).resolve().parent.parent / "data" / "local_ui_jobs.sqlite")
 
 
 class LocalSqliteJobStore:
@@ -147,16 +154,33 @@ class LocalSqliteJobStore:
         job_id: str,
         *,
         timeout_seconds: int,
-        poll_interval_seconds: float = 1.0,
+        poll_interval_seconds: float = 0.5,
     ) -> dict[str, Any]:
         deadline = asyncio.get_running_loop().time() + max(timeout_seconds, 1)
+        ever_claimed = False
         while True:
             job = await self.get_job(job_id)
-            if job.get("status") in {"completed", "failed", "expired"}:
+            status = job.get("status")
+            if status in {"completed", "failed", "expired"}:
                 return job
+            if status == "running":
+                ever_claimed = True
             if asyncio.get_running_loop().time() >= deadline:
+                if not ever_claimed and status == "pending":
+                    # The job was never picked up -> the helper isn't running, or
+                    # it is polling a different queue file. This is the common
+                    # post-setup failure; say so instead of a vague timeout.
+                    raise LocalUiBridgeTimeout(
+                        "The Stake helper never claimed this job. Start or restart the "
+                        "local Stake helper (and make sure it's the current build, not a "
+                        "pre-Supabase-removal process). The job queue is at "
+                        f"{self.db_path}."
+                    )
                 raise LocalUiBridgeTimeout(
-                    "Timed out waiting for the local Stake helper to return Stake UI data."
+                    "The Stake helper claimed this job but did not finish within "
+                    f"{timeout_seconds}s. The browser action is slow or stuck -- retry "
+                    "with fewer games/legs or a higher timeoutSeconds, or check the "
+                    "helper window for a scrape error."
                 )
             await asyncio.sleep(max(poll_interval_seconds, 0.25))
 
@@ -199,6 +223,42 @@ class LocalSqliteJobStore:
 
     async def prune(self, *, retention_seconds: int | None = None) -> dict[str, Any]:
         return await asyncio.to_thread(self._prune, retention_seconds)
+
+    def queue_health(self) -> dict[str, Any]:
+        """Snapshot of the queue so a dead/idle helper is visible at a glance.
+
+        A growing ``pending`` count with nothing ``running`` and a stale
+        ``lastCompletedAt`` means the helper is not claiming jobs.
+        """
+        self._ensure_schema()
+        with self._connect() as conn:
+            counts = {
+                str(row["status"]): int(row["n"])
+                for row in conn.execute(
+                    "SELECT status, COUNT(*) AS n FROM local_ui_jobs GROUP BY status"
+                ).fetchall()
+            }
+            oldest_pending = conn.execute(
+                "SELECT created_at FROM local_ui_jobs WHERE status='pending' "
+                "ORDER BY created_at ASC LIMIT 1"
+            ).fetchone()
+            last_completed = conn.execute(
+                "SELECT completed_at FROM local_ui_jobs WHERE status='completed' "
+                "ORDER BY completed_at DESC LIMIT 1"
+            ).fetchone()
+        oldest_dt = _parse_utc_datetime(oldest_pending["created_at"]) if oldest_pending else None
+        oldest_age = (
+            (datetime.now(timezone.utc) - oldest_dt).total_seconds() if oldest_dt else None
+        )
+        return {
+            "dbPath": self.db_path,
+            "pending": counts.get("pending", 0),
+            "running": counts.get("running", 0),
+            "completed": counts.get("completed", 0),
+            "failed": counts.get("failed", 0),
+            "oldestPendingAgeSeconds": round(oldest_age, 1) if oldest_age is not None else None,
+            "lastCompletedAt": last_completed["completed_at"] if last_completed else None,
+        }
 
     # -- sync implementations (run in a worker thread) -----------------------
 

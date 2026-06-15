@@ -372,12 +372,23 @@ def _browser_status(setup_report: dict[str, Any] | None, fallback: str) -> tuple
 def _job_queue_status(setup_report: dict[str, Any] | None, fallback: str) -> tuple[str, str]:
     # The job queue is a local SQLite file shared by the API and the helper, so
     # it is available whenever the workspace is writable -- no external service.
+    # Surfacing depth makes a stuck/dead helper visible: pending jobs piling up
+    # with nothing running means the helper is not claiming them.
     try:
         from .local_ui_bridge import LocalSqliteJobStore
 
-        if LocalSqliteJobStore().enabled():
-            return ("Local SQLite", "ok")
-        return ("unwritable data dir", "fail")
+        store = LocalSqliteJobStore()
+        if not store.enabled():
+            return ("unwritable data dir", "fail")
+        health = store.queue_health()
+        pending = int(health.get("pending") or 0)
+        running = int(health.get("running") or 0)
+        oldest = health.get("oldestPendingAgeSeconds")
+        if pending and not running and isinstance(oldest, (int, float)) and oldest > 30:
+            return (f"{pending} pending, none running -- helper may be down", "warn")
+        if pending or running:
+            return (f"Local SQLite ({pending} pending, {running} running)", "ok")
+        return ("Local SQLite (idle)", "ok")
     except Exception:
         return (fallback, "info")
 

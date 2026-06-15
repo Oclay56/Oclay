@@ -4374,20 +4374,59 @@ def _has_logged_out_warning(warnings: list[str]) -> bool:
     return any("appears logged out" in warning for warning in warnings)
 
 
+# Transient browser-side fetch failures: Stake's own fetch() throwing (network
+# blip, momentary Cloudflare check, brief connection reset) surfaces as one of
+# these. They usually succeed on a quick retry, so don't fail the whole board
+# read on the first one -- that cascades into a feed-prop fallback with no
+# clickable rowIds and an empty slip.
+_TRANSIENT_FETCH_SIGNATURES = (
+    "failed to fetch",
+    "err_network",
+    "err_connection",
+    "err_timed_out",
+    "net::",
+    "load failed",
+)
+_SGM_FETCH_MAX_ATTEMPTS = 3
+
+
+def _is_transient_fetch_error(message: str) -> bool:
+    lowered = (message or "").lower()
+    return any(sig in lowered for sig in _TRANSIENT_FETCH_SIGNATURES)
+
+
 def _fetch_sgm_board_in_browser(page: Any, fixture_slug: str) -> dict[str, Any]:
-    result = page.evaluate(
-        """
-        async ({ query, variables }) => {
-          const res = await fetch('/_api/graphql', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json', 'x-language': 'en' },
-            body: JSON.stringify({ query, variables })
-          });
-          return { status: res.status, text: await res.text() };
-        }
-        """,
-        {"query": SGM_BOARD_QUERY, "variables": {"fixture": fixture_slug}},
-    )
+    result = None
+    last_error: Exception | None = None
+    for attempt in range(_SGM_FETCH_MAX_ATTEMPTS):
+        try:
+            result = page.evaluate(
+                """
+                async ({ query, variables }) => {
+                  const res = await fetch('/_api/graphql', {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json', 'x-language': 'en' },
+                    body: JSON.stringify({ query, variables })
+                  });
+                  return { status: res.status, text: await res.text() };
+                }
+                """,
+                {"query": SGM_BOARD_QUERY, "variables": {"fixture": fixture_slug}},
+            )
+            break
+        except Exception as exc:  # noqa: BLE001 - inspect the message to decide retry
+            if not _is_transient_fetch_error(str(exc)):
+                raise
+            last_error = exc
+            # Backoff 0.7s, 1.4s before the next try; gives Stake/Cloudflare a beat.
+            page.wait_for_timeout(int(700 * (attempt + 1)))
+    if result is None:
+        raise RuntimeError(
+            f"Stake SGM board fetch kept failing after {_SGM_FETCH_MAX_ATTEMPTS} "
+            f"attempts (transient 'Failed to fetch' from Stake's page). The site or "
+            f"Cloudflare is likely throttling reads -- cool down and scan fewer games. "
+            f"Last error: {last_error}"
+        )
 
     if result["status"] != 200:
         block = _replay_block_message(result["status"], result["text"])
