@@ -46,34 +46,43 @@ front-end with a fast, deterministic local one. "Engine proposes, you dispose."
 6. **Re-roll / tweak** before committing: ask for a *different* construction at
    the same magnitude, swap a leg, or slide the diversity dial.
 
-## 4. Anti-hits / anti-repetition as a first-class principle
+## 4. Avoiding hits-reliance — by measuring value, not by penalizing hits
 
-The defining product stance: **the opposite of an LLM's instinct.** An LLM leans
-on `hits` and repeats familiar props because it pattern-matches to what's frequent
-— not because it's optimal.
+The stance is "the opposite of an LLM's instinct," but the *mechanism* is the
+subtle part. An LLM over-picks `hits` because it confuses **likely** with
+**good**: hits has the highest raw hit-rate, so anything that rewards likelihood
+gravitates there. But hits is the most heavily bet, most efficiently priced
+market, so its de-vigged fair price already reflects that probability — the actual
+**edge is near zero.**
 
-**Why leaning on hits is also bad EV (not just bad taste):** the popular,
-"consistent" props are the most heavily bet and the most sharply priced by books,
-so they hold the *least* edge. The mispricing — the actual money — lives in the
-**thinner, less-trafficked markets** that books pay less attention to. This is the
-same reason the sharp-line signal finds more overlays in thin markets. So "don't
-rely on hits" is a real optimization principle, and a deterministic engine that
-hunts edge + variety is the opposite of the GPT **by construction**.
+So the engine adds **no diversity dial and no counterweight against hits.** A knob
+that demotes hits would fight merit and bury a *genuinely good* hits bet — exactly
+what we will not do. Instead, variety is an **emergent consequence of ranking on
+edge (value vs the real market), not on likelihood**:
 
-**The hard guardrail:** diversity is a **search bias and a tiebreaker, gated by
-merit** — explore the less-obvious props, and when two constructions are close,
-prefer the more varied / less hits-reliant one; but **never play a worse leg just
-to be different.** Dynamic, not dumb.
+- A hits bet the model thinks is **genuinely mispriced** → real edge → it gets
+  played. Authentic, merit intact.
+- A hits bet that is merely "safe and likely" but fairly priced → ~0 edge → it
+  falls on its own, with no override.
 
-Mechanisms (some exist, some new — see §6):
-- **Variety as an objective**, not only a penalty (extend the existing
-  diversity-adjusted marginal selection + concentration penalty).
-- **Market-efficiency weighting** — bias toward thinner markets where overlays
-  live, which naturally steers away from hits.
-- **Novelty memory** — the local ledger remembers recently shown/built players
-  and props, so night-to-night the menu does not re-serve the same names.
-- **Exposure meter + diversity dial + re-roll + contrarian mode** — see the
-  concentration, choose how spread you want it, regenerate alternatives.
+The system avoids the boring chalk *for the right reason* — there is no value there
+— not because a setting told it to. If a night's genuine edges happen to cluster in
+one market, that is signal and we play them; we only kill **forced** repetition of
+**safe** props, which edge-first ranking eliminates by itself.
+
+**Three merit-preserving mechanisms (no dial, no override):**
+- **Rank on edge, not probability** (`edge = estimatedProbability − fairProbability`,
+  already in the model). This is the entire engine of natural variety.
+- **The realized-ROI kill-switch** prunes markets by **data, not taste** — a hits
+  bet that pays survives; one that chronically loses gets downweighted.
+- **The correlation/concentration penalty, framed as *risk*** — six correlated
+  legs are not six independent shots, so an all-one-stat slip is genuinely more
+  fragile. It only bites when legs truly move together; independently-strong legs
+  across different players are never touched.
+
+**Repetition/novelty is display-only or a pure tiebreaker** — the TUI flags "bet
+this player yesterday" as info and uses freshness only to break a genuine tie
+between equally-meritorious bets. It never demotes a still-good bet.
 
 ## 5. Architecture & data flow
 
@@ -116,10 +125,10 @@ construction and letting the user pick.
    ladder across magnitudes" (compose existing functions; rate-limit-aware).
 2. **The dashboard UI** — band menu, target box, exposure meter, re-roll,
    diversity dial. Served as a local web page by the existing API.
-3. **Diversity-as-objective upgrade** — promote variety from a tax to a scored
-   objective; add market-efficiency weighting and the diversity dial.
-4. **Novelty memory** — read recent players/props from the ledger and
-   de-prioritize repeats across sessions.
+3. **Merit-honest variety** — keep ranking on edge (not likelihood); frame the
+   concentration penalty as risk. **No diversity dial or override** (see §4).
+4. **Novelty surfacing** — read recent players/props from the ledger and *flag*
+   repeats (display + tiebreaker only, never a merit demotion).
 5. **Click-to-build wiring** — band card → existing validate+build flow.
 6. **(Optional) local NL** — a shorthand command bar (regex grammar) and/or a
    small local LLM (Ollama) as a parameter-extractor, so casual input never
@@ -167,10 +176,23 @@ if desired.
 6. **Dynamic layer** — live re-rank, progressive load, re-roll.
 7. **(Optional) local NL** — shorthand bar, then a local model if wanted.
 
-## 12. Open decisions (for the user)
-- Dashboard form: **local web page** (recommended, most visual) vs. extended TUI
-  screen vs. minimal one-button CLI.
-- GPT: **demote to optional** (recommended) vs. fully remove.
-- Default scan scope: all games vs. a chosen subset (rate-limit trade-off).
-- How aggressive the anti-hits bias should be by default (the diversity dial's
-  resting position).
+## 12. Decisions
+
+**Locked:**
+- Dashboard form: **TUI** — extend the existing Textual `Oclay.bat` with a
+  decision/bands screen. CLI stays only as an optional scriptable companion.
+- Anti-hits: **no diversity dial, no override.** Variety is emergent from
+  edge-first ranking; novelty is display/tiebreaker only (§4).
+
+**Still open (settle before Phase 1):**
+1. **GPT fate** — demote to optional (recommended) vs. fully remove.
+2. **Default scan scope** — all games vs. a chosen subset (rate-limit trade-off).
+3. **Band tiers** — fixed magnitudes (10x / 100x / 1k / 10k / 100k / max) vs.
+   adaptive to what the board actually reaches that night.
+4. **TUI ↔ engine wiring** — TUI calls the local API over localhost (same path the
+   GPT used) vs. imports the engine + job store in-process.
+5. **Execution-ready gating** — a band is "buildable" only if its legs have
+   confirmed UI rowIds (not feed props); confirm the menu builds from the UI
+   candidate pool and flags non-executable constructions.
+6. **`Failed to fetch` second-line recovery** — add page-reload + Cloudflare
+   re-clear before re-read now, or wait and see if the retry/backoff suffices.
