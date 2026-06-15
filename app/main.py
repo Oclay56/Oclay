@@ -64,6 +64,7 @@ from .stake_client import StakeAPIError, StakeClient, build_http_client
 from .stake_odds_fill import fill_missing_leg_odds
 from .stake_sgm_browser import make_sgm_selection_row_id, sgm_market_filter_matches
 from .storage import GptActionStore
+from .bands import assemble_bands
 
 
 app = FastAPI(
@@ -1011,6 +1012,7 @@ async def mlb_stake_ui_sgm_candidate_pool(
         maximum=180,
     )
     compact = _bool_from_body(payload, "compact", "compact", True)
+    include_band_menu = _bool_from_body(payload, "includeBandMenu", "include_band_menu", False)
     max_games = _clean_int_from_body(payload, "maxGames", 15, minimum=1, maximum=20)
     fixture_slugs = _string_list_from_body(payload, "fixtureSlugs", "fixture_slugs")[:max_games]
     matchups = _string_list_from_body(payload, "matchups", "matchup")
@@ -1053,6 +1055,7 @@ async def mlb_stake_ui_sgm_candidate_pool(
             "contextCoverage": {},
             "compact": compact,
             "notes": ["No Stake UI fixture slugs were available for candidate scanning."],
+            **({"bandMenu": assemble_bands(None, None)} if include_band_menu else {}),
         }
 
     request = {
@@ -1176,7 +1179,18 @@ async def mlb_stake_ui_sgm_candidate_pool(
         slate_date.isoformat() if slate_date else None,
         enabled=_bool_from_body(payload, "recordToLedger", "record_to_ledger", True),
     )
-    return compact_sgm_candidate_pool_response(pool) if compact else pool
+    # Read-only adaptive band menu for the decision dashboard. Computed on the full
+    # pool (full fidelity) and attached to whatever response shape is returned;
+    # nothing is built here.
+    band_menu = (
+        assemble_bands(pool.get("slipBlueprints"), pool.get("rankedCandidates"))
+        if include_band_menu
+        else None
+    )
+    result = compact_sgm_candidate_pool_response(pool) if compact else pool
+    if band_menu is not None:
+        result["bandMenu"] = band_menu
+    return result
 
 
 @app.post("/mlb/stake-ui/review-slip")

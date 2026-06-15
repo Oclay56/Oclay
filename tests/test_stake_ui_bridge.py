@@ -859,6 +859,48 @@ def test_stake_ui_sgm_candidate_pool_compact_mode_trims_nested_context():
     assert "last15" not in row
 
 
+def test_candidate_pool_attaches_band_menu_when_requested():
+    fake_store = FakeCompletedCandidatePoolJobStore()
+    app.dependency_overrides[get_local_ui_job_store] = lambda: fake_store
+    app.dependency_overrides[get_mlb_engine] = lambda: FakeCandidatePoolMLBEngine()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/mlb/stake-ui/sgm-candidate-pool",
+            json={
+                "date": "2026-05-25",
+                "fixtureSlugs": ["46575351-new-york-yankees-toronto-blue-jays"],
+                "side": "under",
+                "markets": "singles",
+                "compact": True,
+                "includeBandMenu": True,
+                "timeoutSeconds": 45,
+            },
+        )
+
+    body = response.json()
+    assert response.status_code == 200
+    # The read-only band menu rides alongside the compact pool.
+    assert "bandMenu" in body
+    assert body["bandMenu"]["source"] == "oclay_band_menu"
+    assert isinstance(body["bandMenu"]["bands"], list)
+
+
+def test_candidate_pool_omits_band_menu_by_default():
+    fake_store = FakeCompletedCandidatePoolJobStore()
+    app.dependency_overrides[get_local_ui_job_store] = lambda: fake_store
+    app.dependency_overrides[get_mlb_engine] = lambda: FakeCandidatePoolMLBEngine()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/mlb/stake-ui/sgm-candidate-pool",
+            json={"fixtureSlugs": ["46575351-new-york-yankees-toronto-blue-jays"], "compact": True},
+        )
+
+    assert response.status_code == 200
+    assert "bandMenu" not in response.json()
+
+
 def test_stake_ui_review_slip_batch_route_creates_one_batch_job_with_guardrails():
     fake_store = FakeCompletedBatchBuildJobStore()
     app.dependency_overrides[get_local_ui_job_store] = lambda: fake_store
