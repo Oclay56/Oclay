@@ -25,6 +25,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from .sqlite_util import ensure_auto_vacuum_full
+
 
 DEFAULT_LEDGER_PATH = Path("data") / "pick_ledger.sqlite"
 
@@ -42,6 +44,7 @@ class PickLedger:
         configured = db_path or os.getenv("OCLAY_LEDGER_PATH") or DEFAULT_LEDGER_PATH
         self.db_path = Path(configured)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_auto_vacuum_full(self.db_path)
         self._ensure_schema()
 
     # ------------------------------------------------------------------

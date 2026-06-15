@@ -21,6 +21,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from .sqlite_util import ensure_auto_vacuum_full
+
 
 STAKE_SGM_BOARD_JOB_TYPE = "stake_ui_sgm_board"
 STAKE_SGM_BOARD_BATCH_JOB_TYPE = "stake_ui_sgm_board_batch"
@@ -93,6 +95,9 @@ class LocalSqliteJobStore:
     def _ensure_schema(self) -> None:
         if self._initialized:
             return
+        # FULL auto_vacuum so the queue returns freed pages to the OS every time
+        # finished rows are pruned, instead of holding its high-water mark.
+        ensure_auto_vacuum_full(self.db_path)
         with self._connect() as conn:
             conn.execute(
                 """

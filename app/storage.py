@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .sqlite_util import ensure_auto_vacuum_full
+
 
 DEFAULT_DB_PATH = Path("data") / "gpt_action.sqlite"
 
@@ -18,6 +20,7 @@ class GptActionStore:
         configured_path = db_path or os.getenv("AZP_DB_PATH") or DEFAULT_DB_PATH
         self.db_path = Path(configured_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_auto_vacuum_full(self.db_path)
         self._ensure_schema()
 
     def save_market_mappings(self, mappings: list[dict[str, Any]]) -> dict[str, Any]:
