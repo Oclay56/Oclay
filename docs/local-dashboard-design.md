@@ -1,7 +1,7 @@
 # OCLAY Local Decision Dashboard — Design
 
-Status: **proposal / not yet built.** This captures the agreed direction so it can
-be reacted to as one picture before any code is written.
+Status: **agreed — ready to build.** This is the settled plan; Phase 1
+(read-only slate-scan + band screen) can commence.
 
 ## 1. The vision in one line
 
@@ -28,8 +28,8 @@ front-end with a fast, deterministic local one. "Engine proposes, you dispose."
 
 ## 3. User-facing model
 
-1. **Launch → scan the slate.** The dashboard reads the board (all games, or a
-   chosen subset) and computes the full ladder.
+1. **Launch → scan the slate.** The TUI reads the board (all games, scanned in
+   rate-limit-safe batches) and computes the full ladder.
 2. **A menu of payout bands appears** — e.g. `~15x`, `~250x`, `~5kx`, `~50kx`,
    `max reachable`. Each band is the *sharpest construction the board supports at
    that magnitude*, not padded junk to hit a round number. The **shape is
@@ -44,7 +44,7 @@ front-end with a fast, deterministic local one. "Engine proposes, you dispose."
 5. **Click a band → build.** This fires the existing validate → click-into-Stake →
    real-quote-check → auto-log flow. No retyping, no OpenAI.
 6. **Re-roll / tweak** before committing: ask for a *different* construction at
-   the same magnitude, swap a leg, or slide the diversity dial.
+   the same magnitude, or swap a leg. (No diversity dial — see §4.)
 
 ## 4. Avoiding hits-reliance — by measuring value, not by penalizing hits
 
@@ -88,7 +88,7 @@ between equally-meritorious bets. It never demotes a still-good bet.
 
 ```
         ┌──────────────── all local, no cloud ────────────────┐
-Browser │ Dashboard UI  ──HTTP(localhost)──►  FastAPI (app.main) │
+ TUI    │ decision screen ─HTTP(localhost)─►  FastAPI (app.main) │
 (you)   │  - band menu                          │               │
         │  - type-a-target box                  ▼               │
         │  - exposure / re-roll      candidate pool + frontier  │
@@ -123,8 +123,8 @@ construction and letting the user pick.
 ### New work (mostly the *face* + turning diversity into an objective)
 1. **A slate-scan orchestration call** — "read all games → assemble the full
    ladder across magnitudes" (compose existing functions; rate-limit-aware).
-2. **The dashboard UI** — band menu, target box, exposure meter, re-roll,
-   diversity dial. Served as a local web page by the existing API.
+2. **The TUI decision screen** — band menu, target box, exposure meter, re-roll.
+   A new Textual screen in the existing app, calling the localhost API (no dial).
 3. **Merit-honest variety** — keep ranking on edge (not likelihood); frame the
    concentration penalty as risk. **No diversity dial or override** (see §4).
 4. **Novelty surfacing** — read recent players/props from the ledger and *flag*
@@ -153,14 +153,21 @@ board-read cache and respects `OCLAY_SGM_BOARD_THROTTLE_SECONDS`. The retry/back
 in `_fetch_sgm_board_in_browser` is the per-read floor; batching is the
 slate-level guard.
 
-## 9. The GPT is removed
+## 9. The GPT is removed — and the tunnel/ngrok with it
 The Custom GPT path is **fully removed** — no OpenAI in the loop at all. The TUI is
 the only driver. "Tell it what you want" is the local **type-a-target box** (e.g.
 `10k`), which is a trivial local magnitude parse, not a remote model. If richer
 free-form input is ever wanted it stays **local** (a shorthand grammar, or a small
-local model like Ollama) — never a cloud dependency. Removing the GPT also means
-the Custom-GPT action schema + instruction files stop being the product surface;
-they can be retired once the TUI covers their flows.
+local model like Ollama) — never a cloud dependency.
+
+Retiring the GPT also retires the **inbound tunnel (ngrok / cloudflared)**. That
+tunnel existed *only* so OpenAI's servers could reach *in* to the local API. With
+the GPT gone, nothing reaches in — so the tunnel, `OCLAY_NGROK_DOMAIN`, the
+background tunnel window, the `/gpt/*` endpoints, and the Custom-GPT action schema
++ instruction files all come out. The only connections left are **local**
+(TUI ↔ API on `127.0.0.1`) and **outbound** (Chrome → Stake, API → Odds API).
+Net result: OCLAY has **zero inbound exposure to the internet** — nothing on the
+public net can even reach the machine.
 
 ## 10. Guardrails / non-goals
 - **Merit first.** Variety, novelty, and contrarian bias are tiebreakers/search
@@ -189,8 +196,10 @@ they can be retired once the TUI covers their flows.
 7. **Dynamic layer** — live re-rank, progressive load, re-roll.
 8. **Menu reorg + hotkey remap** — remove Review/Build from the main menu, add
    `Start` (`ctrl+s`), move `Stop` to `ctrl+d` (§15).
-9. **Retire the Custom GPT** — remove the action schema + instruction files once
-   the TUI covers their flows (§9).
+9. **Retire the Custom GPT + tunnel** — once the TUI covers the GPT's flows,
+   remove the action schema, instruction files, the `/gpt/*` endpoints, and the
+   inbound tunnel (ngrok / cloudflared + `OCLAY_NGROK_DOMAIN` + its background
+   window). Nothing reaches *in* anymore; only outbound calls remain (§9).
 
 ## 12. Decisions — settled
 
@@ -231,13 +240,15 @@ OCLAY/
 - **Code:** the bands screen is a **new module under `app/`**, part of the
   existing Textual app — not a separate program.
 - **Launch:** the **same `Oclay.bat`** at the repo root you already use. It opens
-  the TUI; a **"Bands"** menu entry goes to the decision screen. No new top-level
-  clutter — one mental model: "double-click Oclay, it's all in there." (An optional
-  `Oclay_Bands.bat` could jump straight to the screen, but isn't needed.)
+  the TUI; the **`Start`** entry (`ctrl+s`) goes to the decision/bands screen. No
+  new top-level clutter — one mental model: "double-click Oclay, it's all in
+  there." (An optional `Oclay_Start.bat` could jump straight to the screen, but
+  isn't needed.)
 - **API:** `Oclay.bat` → `start-oclay-all.ps1` already starts the local API in the
-  background alongside the TUI, so the bands screen just calls
-  `http://127.0.0.1:8000` — no extra process to manage. (With the GPT removed, the
-  tunnel is no longer needed for the product, only the local API.)
+  background alongside the TUI, so the decision screen just calls
+  `http://127.0.0.1:8000` — no extra process to manage. Once the GPT + tunnel are
+  retired (§9), the supervisor stops launching the tunnel entirely; only the local
+  API stays.
 
 ## 14. TUI flow & screens (start to finish)
 
